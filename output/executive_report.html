@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantitative Strategy & Data Optimization Master Executive Report</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; color: #1e293b; line-height: 1.6; padding: 40px; }
+        .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #cbd5e1; padding-bottom: 20px; }
+        .header h1 { color: #0f172a; margin: 0 0 10px 0; }
+        .section { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 25px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .section-title { font-size: 1.3rem; color: #1e3a8a; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; margin-top: 0; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.85rem; }
+        th { background-color: #1e293b; color: #ffffff; text-align: left; padding: 10px; }
+        td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+        tr:nth-child(even) { background-color: #f1f5f9; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        img { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 Quantitative Strategy & Data Optimization Executive Report</h1>
+        <p>Exponential Moving Average Stop-And-Reverse (EMA SAR) Universe Evaluation</p>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">📐 Mathematical Formulas & Methodology Documentation</h2>
+        <table border="1" class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Metric</th>
+      <th>Formula</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Realistic Return (With 1-Bar Shift)</td>
+      <td>((Balance_Final / Balance_Initial) - 1) * 100</td>
+      <td>Shifted by 1 bar via np.roll(raw_signal, 1) to eliminate lookahead bias.</td>
+    </tr>
+    <tr>
+      <td>Unshifted Return (No Shift)</td>
+      <td>((Balance_Unshifted / Balance_Initial) - 1) * 100</td>
+      <td>Idealized same-bar execution showing lookahead bias baseline.</td>
+    </tr>
+    <tr>
+      <td>Lookahead Bias Delta %</td>
+      <td>Unshifted_Return % - Realistic_Return %</td>
+      <td>Quantifies how much profit is artificially inflated if 1-bar execution delay is ignored.</td>
+    </tr>
+    <tr>
+      <td>Trade Return %</td>
+      <td>((P_exit / P_entry) - 1) * Direction - 2 * Fee</td>
+      <td>Net percentage return per individual trade.</td>
+    </tr>
+    <tr>
+      <td>Profit Factor</td>
+      <td>Sum(Winning Trade PnLs) / Sum(|Losing Trade PnLs|)</td>
+      <td>Ratio of gross profits to gross losses.</td>
+    </tr>
+    <tr>
+      <td>Sharpe Ratio</td>
+      <td>(Mean(Trade Returns) / StdDev(Trade Returns)) * sqrt(N)</td>
+      <td>Risk-adjusted return relative to total trade volatility.</td>
+    </tr>
+    <tr>
+      <td>Sortino Ratio</td>
+      <td>(Mean(Trade Returns) / Downside_StdDev) * sqrt(N)</td>
+      <td>Risk-adjusted return relative to downside volatility only.</td>
+    </tr>
+    <tr>
+      <td>Calmar Ratio</td>
+      <td>Annualized_Return % / |Max_Drawdown %|</td>
+      <td>Return relative to maximum historical drawdown.</td>
+    </tr>
+    <tr>
+      <td>Max Drawdown %</td>
+      <td>Min((Equity_t - Peak_t) / Peak_t) * 100</td>
+      <td>Deepest peak-to-trough equity decline percentage.</td>
+    </tr>
+    <tr>
+      <td>Expectancy %</td>
+      <td>(Win_Rate * Avg_Win_%) + (Loss_Rate * Avg_Loss_%)</td>
+      <td>Expected average return % per executed trade.</td>
+    </tr>
+    <tr>
+      <td>System Quality Number (SQN)</td>
+      <td>(Expectancy_% / StdDev_%) * sqrt(N)</td>
+      <td>Van Tharp System Quality Number for strategy grading.</td>
+    </tr>
+    <tr>
+      <td>MAE %</td>
+      <td>Min(Unrealized Trade Return %)</td>
+      <td>Maximum Adverse Excursion (deepest unrealized loss during trade).</td>
+    </tr>
+    <tr>
+      <td>MFE %</td>
+      <td>Max(Unrealized Trade Return %)</td>
+      <td>Maximum Favorable Excursion (peak unrealized gain during trade).</td>
+    </tr>
+  </tbody>
+</table>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">🏆 Top Universe Strategy Summary (Ranked by Profit %)</h2>
+        <table border="1" class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>symbol</th>
+      <th>timeframe</th>
+      <th>best_ema_x</th>
+      <th>best_ema_y</th>
+      <th>final_balance</th>
+      <th>profit_pct</th>
+      <th>profit_pct_no_shift</th>
+      <th>lookahead_bias_delta_pct</th>
+      <th>buy_and_hold_return_pct</th>
+      <th>alpha_pct</th>
+      <th>profit_factor</th>
+      <th>sharpe</th>
+      <th>sortino</th>
+      <th>calmar</th>
+      <th>max_drawdown_pct</th>
+      <th>total_trades</th>
+      <th>win_rate_pct</th>
+      <th>payoff_ratio</th>
+      <th>expectancy_pct</th>
+      <th>expectancy_dollars</th>
+      <th>sqn</th>
+      <th>max_consecutive_wins</th>
+      <th>max_consecutive_losses</th>
+      <th>avg_win_pct</th>
+      <th>avg_loss_pct</th>
+      <th>avg_hold_bars</th>
+      <th>avg_mae_pct</th>
+      <th>avg_mfe_pct</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>XAG</td>
+      <td>3h</td>
+      <td>36</td>
+      <td>77</td>
+      <td>1540935.32</td>
+      <td>1440.94</td>
+      <td>-95.42</td>
+      <td>-1536.36</td>
+      <td>65.14</td>
+      <td>1375.80</td>
+      <td>6.64</td>
+      <td>6.08</td>
+      <td>5.71</td>
+      <td>71.33</td>
+      <td>-20.20</td>
+      <td>75</td>
+      <td>84.00</td>
+      <td>1.26</td>
+      <td>3.87</td>
+      <td>19212.47</td>
+      <td>6.08</td>
+      <td>32</td>
+      <td>2</td>
+      <td>5.72</td>
+      <td>-5.84</td>
+      <td>53.3</td>
+      <td>-6.09</td>
+      <td>5.68</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>2h</td>
+      <td>2</td>
+      <td>4</td>
+      <td>1309223.46</td>
+      <td>1209.22</td>
+      <td>-96.58</td>
+      <td>-1305.81</td>
+      <td>322.75</td>
+      <td>886.47</td>
+      <td>1.33</td>
+      <td>3.34</td>
+      <td>2.67</td>
+      <td>34.15</td>
+      <td>-35.41</td>
+      <td>950</td>
+      <td>71.89</td>
+      <td>0.52</td>
+      <td>0.32</td>
+      <td>1272.87</td>
+      <td>3.34</td>
+      <td>17</td>
+      <td>4</td>
+      <td>1.58</td>
+      <td>-2.92</td>
+      <td>4.2</td>
+      <td>-1.90</td>
+      <td>1.18</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>30m</td>
+      <td>47</td>
+      <td>107</td>
+      <td>1227189.43</td>
+      <td>1127.19</td>
+      <td>-96.38</td>
+      <td>-1223.57</td>
+      <td>96.57</td>
+      <td>1030.62</td>
+      <td>2.64</td>
+      <td>3.67</td>
+      <td>3.47</td>
+      <td>22.22</td>
+      <td>-50.72</td>
+      <td>56</td>
+      <td>78.57</td>
+      <td>0.72</td>
+      <td>5.21</td>
+      <td>20128.38</td>
+      <td>3.67</td>
+      <td>12</td>
+      <td>3</td>
+      <td>9.46</td>
+      <td>-10.39</td>
+      <td>71.4</td>
+      <td>-10.61</td>
+      <td>8.82</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>4h</td>
+      <td>197</td>
+      <td>288</td>
+      <td>781437.99</td>
+      <td>681.44</td>
+      <td>-46.15</td>
+      <td>-727.59</td>
+      <td>48.66</td>
+      <td>632.78</td>
+      <td>25.28</td>
+      <td>2.31</td>
+      <td>0.00</td>
+      <td>196.51</td>
+      <td>-3.47</td>
+      <td>12</td>
+      <td>91.67</td>
+      <td>2.30</td>
+      <td>21.72</td>
+      <td>56786.50</td>
+      <td>2.31</td>
+      <td>11</td>
+      <td>1</td>
+      <td>24.01</td>
+      <td>-3.47</td>
+      <td>333.2</td>
+      <td>-8.18</td>
+      <td>29.93</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>15m</td>
+      <td>73</td>
+      <td>186</td>
+      <td>708905.13</td>
+      <td>608.91</td>
+      <td>-95.23</td>
+      <td>-704.13</td>
+      <td>54.07</td>
+      <td>554.83</td>
+      <td>2.00</td>
+      <td>2.91</td>
+      <td>1.84</td>
+      <td>9.77</td>
+      <td>-62.32</td>
+      <td>38</td>
+      <td>86.84</td>
+      <td>0.30</td>
+      <td>6.78</td>
+      <td>16023.82</td>
+      <td>2.91</td>
+      <td>14</td>
+      <td>1</td>
+      <td>10.80</td>
+      <td>-19.77</td>
+      <td>105.2</td>
+      <td>-13.25</td>
+      <td>11.21</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>30m</td>
+      <td>33</td>
+      <td>129</td>
+      <td>488403.32</td>
+      <td>388.40</td>
+      <td>-88.20</td>
+      <td>-476.61</td>
+      <td>352.39</td>
+      <td>36.01</td>
+      <td>2.46</td>
+      <td>2.83</td>
+      <td>3.24</td>
+      <td>14.39</td>
+      <td>-27.00</td>
+      <td>53</td>
+      <td>71.70</td>
+      <td>0.97</td>
+      <td>3.46</td>
+      <td>7328.36</td>
+      <td>2.83</td>
+      <td>9</td>
+      <td>3</td>
+      <td>8.16</td>
+      <td>-8.44</td>
+      <td>75.4</td>
+      <td>-9.56</td>
+      <td>6.71</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>4h</td>
+      <td>10</td>
+      <td>17</td>
+      <td>448880.16</td>
+      <td>348.88</td>
+      <td>-88.31</td>
+      <td>-437.19</td>
+      <td>-72.07</td>
+      <td>420.95</td>
+      <td>1.51</td>
+      <td>2.38</td>
+      <td>1.98</td>
+      <td>6.97</td>
+      <td>-50.06</td>
+      <td>235</td>
+      <td>77.02</td>
+      <td>0.45</td>
+      <td>0.78</td>
+      <td>1484.60</td>
+      <td>2.38</td>
+      <td>13</td>
+      <td>3</td>
+      <td>2.91</td>
+      <td>-6.39</td>
+      <td>17.0</td>
+      <td>-3.79</td>
+      <td>2.50</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>1h</td>
+      <td>89</td>
+      <td>115</td>
+      <td>404252.69</td>
+      <td>304.25</td>
+      <td>-79.00</td>
+      <td>-383.25</td>
+      <td>-21.24</td>
+      <td>325.49</td>
+      <td>8.73</td>
+      <td>4.71</td>
+      <td>3.59</td>
+      <td>16.89</td>
+      <td>-18.01</td>
+      <td>42</td>
+      <td>85.71</td>
+      <td>1.45</td>
+      <td>3.50</td>
+      <td>7244.11</td>
+      <td>4.71</td>
+      <td>11</td>
+      <td>1</td>
+      <td>4.77</td>
+      <td>-4.12</td>
+      <td>95.2</td>
+      <td>-4.71</td>
+      <td>5.11</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>5m</td>
+      <td>137</td>
+      <td>227</td>
+      <td>369835.81</td>
+      <td>269.84</td>
+      <td>-87.21</td>
+      <td>-357.04</td>
+      <td>77.34</td>
+      <td>192.49</td>
+      <td>1.90</td>
+      <td>2.22</td>
+      <td>2.57</td>
+      <td>6.12</td>
+      <td>-44.12</td>
+      <td>22</td>
+      <td>68.18</td>
+      <td>0.89</td>
+      <td>7.57</td>
+      <td>12265.26</td>
+      <td>2.22</td>
+      <td>5</td>
+      <td>2</td>
+      <td>16.17</td>
+      <td>-10.85</td>
+      <td>181.7</td>
+      <td>-17.80</td>
+      <td>14.44</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>5m</td>
+      <td>99</td>
+      <td>261</td>
+      <td>355632.45</td>
+      <td>255.63</td>
+      <td>-81.51</td>
+      <td>-337.14</td>
+      <td>21.79</td>
+      <td>233.84</td>
+      <td>4.54</td>
+      <td>2.70</td>
+      <td>2.08</td>
+      <td>7.27</td>
+      <td>-35.16</td>
+      <td>25</td>
+      <td>88.00</td>
+      <td>0.62</td>
+      <td>5.90</td>
+      <td>10225.30</td>
+      <td>2.70</td>
+      <td>11</td>
+      <td>2</td>
+      <td>9.20</td>
+      <td>-18.25</td>
+      <td>159.9</td>
+      <td>-12.73</td>
+      <td>9.92</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>4h</td>
+      <td>292</td>
+      <td>300</td>
+      <td>331974.74</td>
+      <td>231.97</td>
+      <td>-76.48</td>
+      <td>-308.46</td>
+      <td>-47.67</td>
+      <td>279.65</td>
+      <td>4.07</td>
+      <td>3.63</td>
+      <td>5.81</td>
+      <td>13.65</td>
+      <td>-16.99</td>
+      <td>17</td>
+      <td>88.24</td>
+      <td>0.54</td>
+      <td>7.70</td>
+      <td>13645.57</td>
+      <td>3.63</td>
+      <td>13</td>
+      <td>1</td>
+      <td>10.26</td>
+      <td>-11.52</td>
+      <td>235.2</td>
+      <td>-10.04</td>
+      <td>11.33</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>1h</td>
+      <td>87</td>
+      <td>267</td>
+      <td>322491.47</td>
+      <td>222.49</td>
+      <td>-76.32</td>
+      <td>-298.81</td>
+      <td>31.77</td>
+      <td>190.73</td>
+      <td>3.08</td>
+      <td>2.97</td>
+      <td>2.68</td>
+      <td>8.29</td>
+      <td>-26.85</td>
+      <td>30</td>
+      <td>80.00</td>
+      <td>0.77</td>
+      <td>4.32</td>
+      <td>7416.38</td>
+      <td>2.97</td>
+      <td>7</td>
+      <td>1</td>
+      <td>7.26</td>
+      <td>-7.42</td>
+      <td>133.3</td>
+      <td>-10.31</td>
+      <td>7.86</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>4h</td>
+      <td>8</td>
+      <td>68</td>
+      <td>313471.51</td>
+      <td>213.47</td>
+      <td>-81.75</td>
+      <td>-295.22</td>
+      <td>287.94</td>
+      <td>-74.47</td>
+      <td>1.40</td>
+      <td>2.00</td>
+      <td>1.67</td>
+      <td>6.29</td>
+      <td>-33.93</td>
+      <td>132</td>
+      <td>72.73</td>
+      <td>0.53</td>
+      <td>1.09</td>
+      <td>1617.21</td>
+      <td>2.00</td>
+      <td>12</td>
+      <td>3</td>
+      <td>3.95</td>
+      <td>-6.55</td>
+      <td>30.3</td>
+      <td>-6.06</td>
+      <td>3.35</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>1h</td>
+      <td>82</td>
+      <td>134</td>
+      <td>298607.66</td>
+      <td>198.61</td>
+      <td>243.65</td>
+      <td>45.04</td>
+      <td>1315.38</td>
+      <td>-1116.77</td>
+      <td>1.75</td>
+      <td>-0.81</td>
+      <td>-0.49</td>
+      <td>1.42</td>
+      <td>-139.86</td>
+      <td>22</td>
+      <td>77.27</td>
+      <td>0.51</td>
+      <td>-11.53</td>
+      <td>9027.62</td>
+      <td>-0.81</td>
+      <td>8</td>
+      <td>2</td>
+      <td>-6.37</td>
+      <td>-29.06</td>
+      <td>181.7</td>
+      <td>-28.68</td>
+      <td>12.08</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>1h</td>
+      <td>207</td>
+      <td>240</td>
+      <td>286917.41</td>
+      <td>186.92</td>
+      <td>-74.55</td>
+      <td>-261.47</td>
+      <td>-68.69</td>
+      <td>255.60</td>
+      <td>2.52</td>
+      <td>2.54</td>
+      <td>4.62</td>
+      <td>9.63</td>
+      <td>-19.42</td>
+      <td>17</td>
+      <td>76.47</td>
+      <td>0.78</td>
+      <td>7.05</td>
+      <td>10995.14</td>
+      <td>2.54</td>
+      <td>7</td>
+      <td>1</td>
+      <td>12.47</td>
+      <td>-10.53</td>
+      <td>235.2</td>
+      <td>-14.04</td>
+      <td>12.70</td>
+    </tr>
+  </tbody>
+</table>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">🖼️ Portfolio Universe Visual Analytics</h2>
+        <div class="grid-2">
+            <div>
+                <h3>Universe Return vs Risk Frontier</h3>
+                <img src="portfolio_risk_return.png" alt="Risk Return Frontier">
+            </div>
+            <div>
+                <h3>Profit Factor Matrix (Symbol vs Timeframe)</h3>
+                <img src="universe_profit_matrix.png" alt="Universe Matrix">
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">📊 Dataset Properties & Metadata (Before Testing)</h2>
+        <table border="1" class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>symbol</th>
+      <th>timeframe</th>
+      <th>bars_count</th>
+      <th>start_date</th>
+      <th>end_date</th>
+      <th>days_span</th>
+      <th>start_price</th>
+      <th>end_price</th>
+      <th>buy_and_hold_return_pct</th>
+      <th>price_min</th>
+      <th>price_max</th>
+      <th>bar_volatility_pct</th>
+      <th>annualized_volatility_pct</th>
+      <th>market_regime</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ETH</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>2339.046900</td>
+      <td>3001.548844</td>
+      <td>28.32</td>
+      <td>2001.393058</td>
+      <td>5278.843199</td>
+      <td>1.2275</td>
+      <td>229.81</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>2303.426006</td>
+      <td>32602.201769</td>
+      <td>1315.38</td>
+      <td>2289.578273</td>
+      <td>37747.945173</td>
+      <td>1.2287</td>
+      <td>115.01</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>2325.983279</td>
+      <td>33266.815713</td>
+      <td>1330.23</td>
+      <td>2174.997953</td>
+      <td>38327.946739</td>
+      <td>1.2316</td>
+      <td>81.52</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>2343.253239</td>
+      <td>5355.339941</td>
+      <td>128.54</td>
+      <td>1453.507029</td>
+      <td>6067.156676</td>
+      <td>1.2088</td>
+      <td>160.02</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>2350.341282</td>
+      <td>6747.697751</td>
+      <td>187.09</td>
+      <td>1534.200652</td>
+      <td>8482.517910</td>
+      <td>1.2261</td>
+      <td>66.26</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>2323.731192</td>
+      <td>3454.404474</td>
+      <td>48.66</td>
+      <td>2323.731192</td>
+      <td>6868.630036</td>
+      <td>1.2320</td>
+      <td>57.66</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>ETH</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>2353.687455</td>
+      <td>2429.204407</td>
+      <td>3.21</td>
+      <td>931.256173</td>
+      <td>3315.535424</td>
+      <td>1.2142</td>
+      <td>393.71</td>
+      <td>Sideways</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>860.077654</td>
+      <td>1325.128349</td>
+      <td>54.07</td>
+      <td>514.238908</td>
+      <td>2201.567196</td>
+      <td>1.8667</td>
+      <td>349.47</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>851.894282</td>
+      <td>392.307789</td>
+      <td>-53.95</td>
+      <td>307.405719</td>
+      <td>1993.956122</td>
+      <td>1.8061</td>
+      <td>169.06</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>874.586028</td>
+      <td>1462.677735</td>
+      <td>67.24</td>
+      <td>728.241126</td>
+      <td>4040.564698</td>
+      <td>1.8313</td>
+      <td>121.21</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>829.375524</td>
+      <td>1630.269421</td>
+      <td>96.57</td>
+      <td>485.322345</td>
+      <td>1960.296347</td>
+      <td>1.8613</td>
+      <td>246.40</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>840.279227</td>
+      <td>792.552403</td>
+      <td>-5.68</td>
+      <td>499.677896</td>
+      <td>1745.507058</td>
+      <td>1.8538</td>
+      <td>100.19</td>
+      <td>Sideways</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>846.533598</td>
+      <td>2691.598174</td>
+      <td>217.96</td>
+      <td>564.551720</td>
+      <td>5024.282110</td>
+      <td>1.8104</td>
+      <td>84.73</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>GOOGL</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>839.377813</td>
+      <td>1488.575005</td>
+      <td>77.34</td>
+      <td>407.484987</td>
+      <td>1588.636697</td>
+      <td>1.8507</td>
+      <td>600.10</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>1204.591681</td>
+      <td>2029.332187</td>
+      <td>68.47</td>
+      <td>1158.330114</td>
+      <td>5932.300693</td>
+      <td>1.4687</td>
+      <td>274.96</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>1177.574627</td>
+      <td>368.729633</td>
+      <td>-68.69</td>
+      <td>346.928316</td>
+      <td>1314.824088</td>
+      <td>1.4466</td>
+      <td>135.41</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>1217.803021</td>
+      <td>5148.310875</td>
+      <td>322.75</td>
+      <td>1065.214742</td>
+      <td>5148.310875</td>
+      <td>1.4625</td>
+      <td>96.80</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>1221.676812</td>
+      <td>1610.108469</td>
+      <td>31.79</td>
+      <td>679.268061</td>
+      <td>2126.767807</td>
+      <td>1.4641</td>
+      <td>193.81</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>1205.623230</td>
+      <td>1228.532077</td>
+      <td>1.90</td>
+      <td>1068.292972</td>
+      <td>3357.817375</td>
+      <td>1.4781</td>
+      <td>79.88</td>
+      <td>Sideways</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>1231.029251</td>
+      <td>5331.139343</td>
+      <td>333.06</td>
+      <td>820.704608</td>
+      <td>5400.368286</td>
+      <td>1.4570</td>
+      <td>68.19</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>NVDA</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>1227.164445</td>
+      <td>3853.978784</td>
+      <td>214.06</td>
+      <td>991.916773</td>
+      <td>4000.821007</td>
+      <td>1.4517</td>
+      <td>470.74</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>1890.584966</td>
+      <td>2233.893920</td>
+      <td>18.16</td>
+      <td>1739.334221</td>
+      <td>3034.891231</td>
+      <td>1.0167</td>
+      <td>190.34</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>1862.905232</td>
+      <td>7308.001311</td>
+      <td>292.29</td>
+      <td>1862.905232</td>
+      <td>8923.360471</td>
+      <td>1.0107</td>
+      <td>94.61</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>1908.028324</td>
+      <td>6747.355914</td>
+      <td>253.63</td>
+      <td>1886.078224</td>
+      <td>10644.362809</td>
+      <td>0.9942</td>
+      <td>65.81</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>1916.202859</td>
+      <td>2837.218358</td>
+      <td>48.06</td>
+      <td>1222.953515</td>
+      <td>3318.427500</td>
+      <td>0.9996</td>
+      <td>132.32</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>1881.773937</td>
+      <td>8013.907487</td>
+      <td>325.87</td>
+      <td>1839.821965</td>
+      <td>9212.132886</td>
+      <td>1.0047</td>
+      <td>54.30</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>1903.202860</td>
+      <td>6672.146732</td>
+      <td>250.57</td>
+      <td>1903.202860</td>
+      <td>7732.160826</td>
+      <td>1.0183</td>
+      <td>47.66</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>OIL</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>1877.946186</td>
+      <td>10475.539731</td>
+      <td>457.82</td>
+      <td>1297.314366</td>
+      <td>10475.539731</td>
+      <td>1.0020</td>
+      <td>324.93</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>2589.414129</td>
+      <td>797.594128</td>
+      <td>-69.20</td>
+      <td>550.610945</td>
+      <td>2752.553981</td>
+      <td>1.2609</td>
+      <td>236.05</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>2665.572646</td>
+      <td>2504.679167</td>
+      <td>-6.04</td>
+      <td>968.213530</td>
+      <td>2752.260993</td>
+      <td>1.2615</td>
+      <td>118.09</td>
+      <td>Sideways</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>2563.486911</td>
+      <td>7195.960475</td>
+      <td>180.71</td>
+      <td>2448.885228</td>
+      <td>11758.028241</td>
+      <td>1.2656</td>
+      <td>83.77</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>2547.972478</td>
+      <td>973.861444</td>
+      <td>-61.78</td>
+      <td>648.759801</td>
+      <td>2920.936225</td>
+      <td>1.2487</td>
+      <td>165.30</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>2586.300685</td>
+      <td>2646.140131</td>
+      <td>2.31</td>
+      <td>1026.117158</td>
+      <td>3186.178712</td>
+      <td>1.2588</td>
+      <td>68.03</td>
+      <td>Sideways</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>2623.565446</td>
+      <td>732.818659</td>
+      <td>-72.07</td>
+      <td>483.024662</td>
+      <td>3362.583746</td>
+      <td>1.2866</td>
+      <td>60.22</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>SOL</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>2570.005851</td>
+      <td>2212.792579</td>
+      <td>-13.90</td>
+      <td>944.094287</td>
+      <td>3572.131929</td>
+      <td>1.2468</td>
+      <td>404.30</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>361.931093</td>
+      <td>50.767239</td>
+      <td>-85.97</td>
+      <td>49.647509</td>
+      <td>427.381509</td>
+      <td>1.0466</td>
+      <td>195.94</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>365.492886</td>
+      <td>650.225241</td>
+      <td>77.90</td>
+      <td>309.791320</td>
+      <td>850.753632</td>
+      <td>1.0685</td>
+      <td>100.02</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>366.898040</td>
+      <td>621.948218</td>
+      <td>69.52</td>
+      <td>308.127540</td>
+      <td>799.264872</td>
+      <td>1.0685</td>
+      <td>70.73</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>368.255308</td>
+      <td>237.984642</td>
+      <td>-35.38</td>
+      <td>237.984642</td>
+      <td>502.352234</td>
+      <td>1.0562</td>
+      <td>139.82</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>364.990442</td>
+      <td>296.573534</td>
+      <td>-18.74</td>
+      <td>150.053840</td>
+      <td>475.019280</td>
+      <td>1.0570</td>
+      <td>57.13</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>367.304515</td>
+      <td>192.193814</td>
+      <td>-47.67</td>
+      <td>190.688520</td>
+      <td>430.264260</td>
+      <td>1.0485</td>
+      <td>49.07</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>368.525962</td>
+      <td>628.840594</td>
+      <td>70.64</td>
+      <td>196.431588</td>
+      <td>635.468435</td>
+      <td>1.0783</td>
+      <td>349.65</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>549.377455</td>
+      <td>3038.237851</td>
+      <td>453.03</td>
+      <td>463.969956</td>
+      <td>3108.261480</td>
+      <td>1.3960</td>
+      <td>261.34</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>545.146578</td>
+      <td>718.313806</td>
+      <td>31.77</td>
+      <td>405.988193</td>
+      <td>1251.624406</td>
+      <td>1.3808</td>
+      <td>129.25</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>560.556462</td>
+      <td>709.760626</td>
+      <td>26.62</td>
+      <td>313.367030</td>
+      <td>1169.864287</td>
+      <td>1.3902</td>
+      <td>92.02</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>539.175817</td>
+      <td>2342.871636</td>
+      <td>334.53</td>
+      <td>539.175817</td>
+      <td>5861.523955</td>
+      <td>1.4168</td>
+      <td>187.56</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>535.376004</td>
+      <td>884.110432</td>
+      <td>65.14</td>
+      <td>502.496203</td>
+      <td>1433.321936</td>
+      <td>1.3897</td>
+      <td>75.10</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>546.412641</td>
+      <td>1871.908284</td>
+      <td>242.58</td>
+      <td>378.260505</td>
+      <td>3207.717469</td>
+      <td>1.3724</td>
+      <td>64.23</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAG</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>546.854845</td>
+      <td>2691.490025</td>
+      <td>392.18</td>
+      <td>377.322457</td>
+      <td>2943.729749</td>
+      <td>1.3798</td>
+      <td>447.41</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>2787.875405</td>
+      <td>12798.519016</td>
+      <td>359.08</td>
+      <td>1752.026134</td>
+      <td>12837.220058</td>
+      <td>1.4268</td>
+      <td>267.12</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>2807.259940</td>
+      <td>5818.651846</td>
+      <td>107.27</td>
+      <td>1828.072975</td>
+      <td>8505.112853</td>
+      <td>1.4336</td>
+      <td>134.19</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>2928.201739</td>
+      <td>8367.899159</td>
+      <td>185.77</td>
+      <td>2661.698709</td>
+      <td>8981.556096</td>
+      <td>1.4223</td>
+      <td>94.14</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>2892.167310</td>
+      <td>13084.001641</td>
+      <td>352.39</td>
+      <td>2492.906368</td>
+      <td>17417.335992</td>
+      <td>1.4578</td>
+      <td>192.98</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>2847.257438</td>
+      <td>6008.054140</td>
+      <td>111.01</td>
+      <td>1959.789976</td>
+      <td>6997.856378</td>
+      <td>1.4052</td>
+      <td>75.94</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>2841.237861</td>
+      <td>11022.206942</td>
+      <td>287.94</td>
+      <td>2654.044546</td>
+      <td>15341.522127</td>
+      <td>1.4292</td>
+      <td>66.89</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XAU</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>2931.779238</td>
+      <td>3570.628134</td>
+      <td>21.79</td>
+      <td>2428.479528</td>
+      <td>6643.781183</td>
+      <td>1.4226</td>
+      <td>461.31</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>15m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-02-11 15:45</td>
+      <td>41.7</td>
+      <td>2117.887551</td>
+      <td>1529.149408</td>
+      <td>-27.80</td>
+      <td>1145.734599</td>
+      <td>2680.470046</td>
+      <td>0.8205</td>
+      <td>153.60</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>1h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-06-16 15:00</td>
+      <td>166.6</td>
+      <td>2087.932898</td>
+      <td>1644.487339</td>
+      <td>-21.24</td>
+      <td>1149.298722</td>
+      <td>2154.890857</td>
+      <td>0.8330</td>
+      <td>77.98</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>2h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-11-30 06:00</td>
+      <td>333.2</td>
+      <td>2076.414190</td>
+      <td>4329.178839</td>
+      <td>108.49</td>
+      <td>1881.464969</td>
+      <td>4329.178839</td>
+      <td>0.8361</td>
+      <td>55.34</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>30m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-03-25 07:30</td>
+      <td>83.3</td>
+      <td>2097.654673</td>
+      <td>1590.983283</td>
+      <td>-24.15</td>
+      <td>1385.150689</td>
+      <td>2599.054017</td>
+      <td>0.8406</td>
+      <td>111.28</td>
+      <td>Bearish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>3h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-05-15 21:00</td>
+      <td>499.9</td>
+      <td>2124.523231</td>
+      <td>3622.081418</td>
+      <td>70.49</td>
+      <td>1905.045405</td>
+      <td>4646.699384</td>
+      <td>0.8414</td>
+      <td>45.47</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>4h</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2023-10-29 12:00</td>
+      <td>666.5</td>
+      <td>2070.503273</td>
+      <td>3301.621444</td>
+      <td>59.46</td>
+      <td>1690.302881</td>
+      <td>4404.527644</td>
+      <td>0.8330</td>
+      <td>38.99</td>
+      <td>Bullish</td>
+    </tr>
+    <tr>
+      <td>XRP</td>
+      <td>5m</td>
+      <td>4000</td>
+      <td>2022-01-01 00:00</td>
+      <td>2022-01-14 21:15</td>
+      <td>13.9</td>
+      <td>2073.605079</td>
+      <td>3053.589522</td>
+      <td>47.26</td>
+      <td>2028.035026</td>
+      <td>3172.905375</td>
+      <td>0.8343</td>
+      <td>270.54</td>
+      <td>Bullish</td>
+    </tr>
+  </tbody>
+</table>
+    </div>
+</body>
+</html>

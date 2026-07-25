@@ -1,0 +1,14 @@
+Metric,Formula,Description
+Realistic Return (With 1-Bar Shift),((Balance_Final / Balance_Initial) - 1) * 100,"Shifted by 1 bar via np.roll(raw_signal, 1) to eliminate lookahead bias."
+Unshifted Return (No Shift),((Balance_Unshifted / Balance_Initial) - 1) * 100,Idealized same-bar execution showing lookahead bias baseline.
+Lookahead Bias Delta %,Unshifted_Return % - Realistic_Return %,Quantifies how much profit is artificially inflated if 1-bar execution delay is ignored.
+Trade Return %,((P_exit / P_entry) - 1) * Direction - 2 * Fee,Net percentage return per individual trade.
+Profit Factor,Sum(Winning Trade PnLs) / Sum(|Losing Trade PnLs|),Ratio of gross profits to gross losses.
+Sharpe Ratio,(Mean(Trade Returns) / StdDev(Trade Returns)) * sqrt(N),Risk-adjusted return relative to total trade volatility.
+Sortino Ratio,(Mean(Trade Returns) / Downside_StdDev) * sqrt(N),Risk-adjusted return relative to downside volatility only.
+Calmar Ratio,Annualized_Return % / |Max_Drawdown %|,Return relative to maximum historical drawdown.
+Max Drawdown %,Min((Equity_t - Peak_t) / Peak_t) * 100,Deepest peak-to-trough equity decline percentage.
+Expectancy %,(Win_Rate * Avg_Win_%) + (Loss_Rate * Avg_Loss_%),Expected average return % per executed trade.
+System Quality Number (SQN),(Expectancy_% / StdDev_%) * sqrt(N),Van Tharp System Quality Number for strategy grading.
+MAE %,Min(Unrealized Trade Return %),Maximum Adverse Excursion (deepest unrealized loss during trade).
+MFE %,Max(Unrealized Trade Return %),Maximum Favorable Excursion (peak unrealized gain during trade).
