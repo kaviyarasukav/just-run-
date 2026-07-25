@@ -19,3 +19,4 @@ Walk-Forward OOS,3-fold IS->OOS,True out-of-sample validation
 Monte Carlo,500x bootstrap P5/P50/P95,Equity distribution under resampling
 Regime,Rolling 50-bar return,Bull/Bear/Sideways market label
 Lookahead Delta,Unshifted - Shifted return,Phantom profit from same-bar exec
+Trade Return,(P1/P0-1)xDir - 2xFee,Net per-trade return (1-bar shift)
