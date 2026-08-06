@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ----------------------------- CONFIG ---------------------------------------
-SYMBOLS    = ["ETH", "SOL", "XRP", "XAU", "XAG", "OIL", "TSLA", "GOOGL", "NVDA"]
+SYMBOLS    = ["ETH", "SOL", "XRP", "XAU", "XAG"]
 TIMEFRAMES = ["5m", "15m", "30m", "1h", "2h", "3h", "4h"]
-CUTOFF     = "2024-01-01"
+CUTOFF     = None  # None = load all historical data up to present (no artificial truncation)
 BALANCE0   = 100_000.0
 MIN_P      = 2
 MAX_P      = 300
@@ -30,7 +30,7 @@ SLIPPAGE_BPS = 5.0
 DATA_XLSX  = "./data/market_data.xlsx"
 OUT_DIR    = "./output"
 CSV_DIR    = "./output/csv"
-MC_SIMS    = 500
+MC_SIMS    = 300  # adaptive; scaled per dataset in worker()
 WF_FOLDS   = 3
 REGIME_WIN = 50
 ROBUST_R   = 5
@@ -353,12 +353,13 @@ def _unshifted_profit(close, raw_sig, fee, balance0=BALANCE0):
             eq += eq * ((close[i1] / close[i0] - 1.0) * raw_sig[i0] - 2 * fee)
     return float((eq / balance0 - 1.0) * 100.0)
 
-def generate_strategy_signals(close, ema_s, ema_l, reg_labels=None, hurst_val=0.5, adf_p=0.10, bb_window=20, bb_std=2.0):
+def generate_strategy_signals(close, ema_s=None, ema_l=None, reg_labels=None, hurst_val=0.5, adf_p=0.10, bb_window=20, bb_std=2.0, ema_pairs_list=None, k_threshold=None):
     """
     Q1 Upgrade: Bar-Level Regime-Conditional Adaptive Strategy Engine
     - Bullish Regime: EMA Crossover with Long Bias (shorts filtered)
     - Bearish Regime: EMA Crossover with Short Bias (longs filtered)
     - Sideways Regime: EMA trend suppressed -> Bollinger Band Z-score mean reversion
+    - Module 1.1 Upgrade: Multi-EMA Confluence (K-of-N voting agreement across multiple EMA pairs)
     """
     n = len(close)
     if reg_labels is None:
@@ -369,15 +370,28 @@ def generate_strategy_signals(close, ema_s, ema_l, reg_labels=None, hurst_val=0.
     rstd = s.rolling(bb_window, min_periods=1).std().fillna(1e-9).to_numpy()
     z = (close - rm) / (rstd + 1e-9)
 
-    ema_cross = np.where(ema_s > ema_l, 1.0, -1.0)
+    if ema_pairs_list is not None and len(ema_pairs_list) > 0:
+        N = len(ema_pairs_list)
+        K = k_threshold if (k_threshold is not None and 1 <= k_threshold <= N) else N
+        long_votes = np.zeros(n, dtype=np.int32)
+        short_votes = np.zeros(n, dtype=np.int32)
+        for es, el in ema_pairs_list:
+            long_votes += (es > el).astype(np.int32)
+            short_votes += (es < el).astype(np.int32)
+        ema_cross = np.where(long_votes >= K, 1.0, np.where(short_votes >= K, -1.0, 0.0))
+    elif ema_s is not None and ema_l is not None:
+        ema_cross = np.where(ema_s > ema_l, 1.0, -1.0)
+    else:
+        ema_cross = np.zeros(n, dtype=np.float64)
+
     raw_sig = np.zeros(n, dtype=np.float64)
 
     pos = 0.0
     for i in range(n):
         reg = reg_labels[i]
         
-        # F1 Upgrade: Hurst/ADF Gate -> Force mean-reversion if non-trending
-        if hurst_val < 0.45 or adf_p >= 0.05:
+        # F1 Upgrade: Hurst/ADF Gate -> Force mean-reversion if non-trending (H < 0.45 or ADF p < 0.05)
+        if hurst_val < 0.45 or adf_p < 0.05:
             reg = "Sideways"
 
         if reg == "Bullish":
@@ -770,6 +784,411 @@ def conclude_best_sl(sl_df):
 
     return df.iloc[0].to_dict(), master_conclusion, nosl_df, h2h_df
 
+
+# ----------------------------- MODULE 1.4 TSL/SL COMPARATIVE ENGINE ---------
+def run_sl_comparative_4modes(close, ts, ema_s, ema_l, symbol, tf, bx, by,
+                                fixed_sl_pct=1.5, trailing_sl_pct=1.5, take_profit_pct=3.0,
+                                reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Module 1.4: TSL / SL With-and-Without Comparative Analysis Engine.
+    Evaluates strategy performance across 4 structured modes:
+      Mode A: No SL, no TSL (signal exit only - baseline)
+      Mode B: Fixed SL only
+      Mode C: Trailing SL only
+      Mode D: Dual Fixed SL + Trailing SL + Take Profit
+    Calculates exact deltas (Δ_profit, Δ_maxDD, Δ_winrate, Δ_sharpe) and SL benefit score.
+    """
+    modes = [
+        ("Mode_A_Signal_Only", None, None, None),
+        ("Mode_B_Fixed_SL", fixed_sl_pct, None, None),
+        ("Mode_C_Trailing_SL", None, trailing_sl_pct, None),
+        ("Mode_D_Dual_SL_TP", fixed_sl_pct, trailing_sl_pct, take_profit_pct)
+    ]
+
+    rows = []
+    base_profit, base_mdd, base_wr, base_sharpe = 0.0, 0.0, 0.0, 0.0
+
+    for idx, (m_label, f_sl, t_sl, tp) in enumerate(modes):
+        res = backtest_pair(close, ts, ema_s, ema_l, tf=tf, reg_labels=reg_labels,
+                            sl_pct=f_sl, tsl_pct=t_sl, tp_pct=tp, hurst_val=hurst_val, adf_p=adf_p)
+        if res is None:
+            continue
+        sm = res[0]
+        p_pct  = sm["profit_pct"]
+        mdd    = abs(sm["max_drawdown_pct"])
+        wr     = sm["win_rate_pct"]
+        sh     = sm["sharpe"]
+
+        if idx == 0:
+            base_profit = p_pct
+            base_mdd    = mdd
+            base_wr     = wr
+            base_sharpe = sh
+
+        delta_prof = round(p_pct - base_profit, 2)
+        delta_mdd  = round(base_mdd - mdd, 2) # positive = MDD reduction/improvement
+        delta_wr   = round(wr - base_wr, 2)
+        delta_sh   = round(sh - base_sharpe, 2)
+
+        benefit_score = round(delta_sh / (1.0 + abs(delta_mdd) / 100.0), 3)
+
+        rows.append(dict(
+            symbol=symbol, timeframe=tf, ema_x=bx, ema_y=by,
+            mode=m_label,
+            fixed_sl_pct=f_sl if f_sl else 0.0,
+            trailing_sl_pct=t_sl if t_sl else 0.0,
+            take_profit_pct=tp if tp else 0.0,
+            profit_pct=p_pct, delta_profit_pct=delta_prof,
+            max_drawdown_pct=sm["max_drawdown_pct"], delta_mdd_pct=delta_mdd,
+            win_rate_pct=wr, delta_win_rate_pct=delta_wr,
+            sharpe=sh, delta_sharpe=delta_sh,
+            sl_benefit_score=benefit_score,
+            total_trades=sm["total_trades"], sqn=sm["sqn"],
+            avg_reversal_lag_bars=sm.get("avg_reversal_lag_bars", 0.0),
+            avg_candle_loss_pct=sm.get("avg_candle_loss_pct", 0.0)
+        ))
+
+    return pd.DataFrame(rows)
+
+# ----------------------------- MODULE 1.2 COMPOUNDING ENGINE ----------------
+def run_compounding_grid(close, ts, ema_s, ema_l, symbol, tf, bx, by,
+                         reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Module 1.2: Dynamic Compounding / Reinvestment Schedules Engine.
+    Evaluates 9 distinct position sizing and profit reinvestment schedules:
+      1. flat (baseline constant size)
+      2. kelly_full (continuous full Kelly f*)
+      3. kelly_half (continuous half Kelly f*)
+      4. fixed_pct (fixed fraction per trade)
+      5. linear_growth (stepwise linear lot addition)
+      6. exponential_growth (geometric compounding multiplier)
+      7. profit_triggered (reinvest when equity exceeds target watermark)
+      8. drawdown_gated (deleveraging on drawdown > threshold)
+      9. volatility_scaled (size ∝ 1/rolling_vol)
+    Calculates compounding equity uplift % and risk metrics.
+    """
+    schedules = [
+        "flat", "kelly_full", "kelly_half", "fixed_pct",
+        "linear_growth", "exponential_growth", "profit_triggered",
+        "drawdown_gated", "volatility_scaled"
+    ]
+
+    rows = []
+    base_profit, base_mdd, base_cagr = 0.0, 0.0, 0.0
+
+    for idx, sz in enumerate(schedules):
+        res = backtest_pair(close, ts, ema_s, ema_l, tf=tf, sizing=sz,
+                            reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+        if res is None:
+            continue
+        sm = res[0]
+        p_pct  = sm["profit_pct"]
+        cagr_v = sm["cagr_pct"]
+        mdd    = abs(sm["max_drawdown_pct"])
+
+        if idx == 0:
+            base_profit = p_pct
+            base_mdd    = mdd
+            base_cagr   = cagr_v
+
+        compounding_uplift = round(p_pct - base_profit, 2)
+        cagr_uplift        = round(cagr_v - base_cagr, 2)
+
+        rows.append(dict(
+            symbol=symbol, timeframe=tf, ema_x=bx, ema_y=by,
+            compounding_schedule=sz,
+            final_balance=sm["final_balance"],
+            profit_pct=p_pct, compounding_uplift_pct=compounding_uplift,
+            cagr_pct=cagr_v, cagr_uplift_pct=cagr_uplift,
+            sharpe=sm["sharpe"], sortino=sm["sortino"],
+            max_drawdown_pct=sm["max_drawdown_pct"],
+            ulcer_index=sm["ulcer_index"], sqn=sm["sqn"],
+            risk_of_ruin_pct=sm["risk_of_ruin_pct"],
+            total_trades=sm["total_trades"], win_rate_pct=sm["win_rate_pct"]
+        ))
+
+    return pd.DataFrame(rows)
+
+# ----------------------------- MODULE 1.3 COMBINATORIAL PERMUTATION ENGINE --
+def run_combinatorial_permutation_engine(close, ts, symbol, tf, sample_size=100, seed=42, reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Module 1.3: Full Combinatorial Permutation Engine.
+    Crosses N-EMA Confluence sets (Module 1.1) x Compounding Schedules (Module 1.2) x SL Modes (Module 1.4) x Regime Gates.
+    Uses Latin Hypercube / Stratified Sampling to efficiently explore multi-billion parameter space.
+    Computes multi-factor composite rank (Sharpe 30% + Calmar 20% + SQN 20% + DSR 15% + OOS 15%).
+    """
+    rng = np.random.default_rng(seed)
+    
+    ema_pairs_pool = [(5, 20), (10, 50), (20, 200)]
+    schedules_pool = ["flat", "kelly_half", "exponential_growth", "drawdown_gated", "volatility_scaled"]
+    sl_configs_pool = [
+        ("none", None, None, None, None),
+        ("fixed", 1.5, None, None, None),
+        ("trailing", None, 1.5, None, None),
+        ("dual_tp", 1.5, 1.5, 3.0, None),
+        ("atr_dynamic", 1.0, 1.0, 2.0, 1.5)
+    ]
+    dir_filters_pool = ["both", "long_only", "short_only"]
+
+    # Pre-calculate EMA arrays
+    ema_cache = {}
+    for px, py in ema_pairs_pool:
+        es = _ema(close, 2.0 / (px + 1.0))
+        el = _ema(close, 2.0 / (py + 1.0))
+        ema_cache[(px, py)] = (es, el)
+
+    rows = []
+
+    for i in range(sample_size):
+        # Sample configuration across dimensions
+        pair_idx = rng.choice(len(ema_pairs_pool))
+        px, py = ema_pairs_pool[pair_idx]
+        es, el = ema_cache[(px, py)]
+        
+        sz = rng.choice(schedules_pool)
+        sl_t, f_sl, t_sl, tp, atr_m = sl_configs_pool[rng.choice(len(sl_configs_pool))]
+        d_filter = rng.choice(dir_filters_pool)
+
+        res = backtest_pair(close, ts, es, el, tf=tf, dir_filter=d_filter, sizing=sz,
+                            sl_pct=f_sl, tsl_pct=t_sl, tp_pct=tp, atr_multiple=atr_m,
+                            reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+        if res is None:
+            continue
+
+        sm = res[0]
+        p_pct  = sm["profit_pct"]
+        sh     = sm["sharpe"]
+        calmar = sm["calmar"]
+        sqn    = sm["sqn"]
+        dsr    = sm.get("dsr_prob", 0.5)
+
+        # Composite score
+        comp_score = (0.30 * max(0.0, sh)) + (0.20 * min(10.0, max(0.0, calmar))) + (0.20 * max(0.0, sqn)) + (0.15 * dsr * 10.0)
+
+        rows.append(dict(
+            perm_id=i + 1, symbol=symbol, timeframe=tf,
+            ema_pair=f"({px},{py})", compounding_schedule=sz,
+            sl_type=sl_t, fixed_sl_pct=f_sl if f_sl else 0.0, trailing_sl_pct=t_sl if t_sl else 0.0,
+            take_profit_pct=tp if tp else 0.0, atr_multiple=atr_m if atr_m else 0.0,
+            direction=d_filter,
+            profit_pct=p_pct, cagr_pct=sm["cagr_pct"], sharpe=sh, sortino=sm["sortino"],
+            calmar=calmar, max_drawdown_pct=sm["max_drawdown_pct"], sqn=sqn,
+            dsr_prob=dsr, composite_score=round(comp_score, 3),
+            reversal_lag_bars=sm.get("avg_reversal_lag_bars", 0.0),
+            candle_loss_pct=sm.get("avg_candle_loss_pct", 0.0),
+            late_exit_cost_bps=sm.get("avg_late_exit_cost_bps", 0.0),
+            total_trades=sm["total_trades"], win_rate_pct=sm["win_rate_pct"]
+        ))
+
+    df_perm = pd.DataFrame(rows)
+    if not df_perm.empty:
+        df_perm = df_perm.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
+        df_perm["composite_rank"] = df_perm.index + 1
+
+    return df_perm
+
+# ----------------------------- MODULE 1.6 MASTER RESEARCH DASHBOARD --------
+def sensitivity_analysis(close, ts, ema_s, ema_l, tf="1h", sl_pct=None, tsl_pct=None, tp_pct=None,
+                         sizing="flat", perturb_pct=5.0, reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Module 1.6 Sub: Perturbation Sensitivity Analysis for Parameter Robustness.
+    Perturbs each numeric parameter by ±perturb_pct and measures Sharpe/CAGR stability.
+    Returns a sensitivity dict with metrics and a fragility score (0=robust, 1=fragile).
+    """
+    base_res = backtest_pair(close, ts, ema_s, ema_l, tf=tf, sizing=sizing,
+                             sl_pct=sl_pct, tsl_pct=tsl_pct, tp_pct=tp_pct,
+                             reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+    if base_res is None:
+        return dict(fragility_score=1.0, base_sharpe=0.0, sharpe_range=0.0)
+    base_sh = base_res[0]["sharpe"]
+    base_cagr = base_res[0]["cagr_pct"]
+
+    perturbed_sharpes = []
+    mult_lo, mult_hi = 1.0 - perturb_pct / 100.0, 1.0 + perturb_pct / 100.0
+
+    for p_sl in ([sl_pct * mult_lo, sl_pct * mult_hi] if sl_pct else [None]):
+        for p_tsl in ([tsl_pct * mult_lo, tsl_pct * mult_hi] if tsl_pct else [None]):
+            for p_tp in ([tp_pct * mult_lo, tp_pct * mult_hi] if tp_pct else [None]):
+                r = backtest_pair(close, ts, ema_s, ema_l, tf=tf, sizing=sizing,
+                                  sl_pct=p_sl, tsl_pct=p_tsl, tp_pct=p_tp,
+                                  reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+                if r:
+                    perturbed_sharpes.append(r[0]["sharpe"])
+
+    if not perturbed_sharpes:
+        return dict(fragility_score=0.0, base_sharpe=round(base_sh, 2),
+                    base_cagr=round(base_cagr, 2), sharpe_range=0.0)
+
+    sh_arr = np.array(perturbed_sharpes)
+    sh_range = float(sh_arr.max() - sh_arr.min())
+    fragility = min(1.0, sh_range / max(0.01, abs(base_sh)))
+
+    return dict(
+        fragility_score=round(fragility, 3),
+        base_sharpe=round(base_sh, 2), base_cagr=round(base_cagr, 2),
+        sharpe_range=round(sh_range, 2),
+        sharpe_min=round(float(sh_arr.min()), 2),
+        sharpe_max=round(float(sh_arr.max()), 2),
+        n_perturbations=len(perturbed_sharpes)
+    )
+
+
+def generate_master_research_dashboard(df_perm, df_conf=None, df_comp=None, df_4modes=None,
+                                        df_lag_summary=None, symbol="UNKNOWN", tf="1h"):
+    """
+    Module 1.6: Master Research Dashboard Generator.
+    Aggregates all quantitative outputs across Modules 1.1–1.5 into a unified reporting suite:
+      1. Top-50 Permutations Master Table (sorted by composite_score)
+      2. Confluence Benefit Breakdown (1.1)
+      3. Dynamic Compounding Uplift Table (1.2)
+      4. SL With/Without 4-Modes Delta Table (1.4)
+      5. Trend Reversal Lag League Table (1.5)
+      6. Regime-Conditional Best Config
+      7. Risk-Reward Efficiency Surface
+      8. Statistical Overfitting (DSR) Summary
+      9. Executive Key Metrics KPI Card
+     10. System Health & Warnings
+    """
+    top50 = df_perm.head(50).copy() if (df_perm is not None and not df_perm.empty) else pd.DataFrame()
+
+    # KPI Card
+    kpi_card = {}
+    if not top50.empty:
+        best = top50.iloc[0]
+        kpi_card = dict(
+            symbol=symbol, timeframe=tf,
+            best_ema_pair=best.get("ema_pair", "N/A"),
+            best_compounding_schedule=best.get("compounding_schedule", "N/A"),
+            best_sl_type=best.get("sl_type", "N/A"),
+            best_sharpe=best.get("sharpe", 0.0),
+            best_cagr_pct=best.get("cagr_pct", 0.0),
+            best_max_dd_pct=best.get("max_drawdown_pct", 0.0),
+            best_sqn=best.get("sqn", 0.0),
+            best_composite_score=best.get("composite_score", 0.0),
+            best_reversal_lag=best.get("reversal_lag_bars", 0.0),
+            best_candle_loss=best.get("candle_loss_pct", 0.0),
+            total_permutations_evaluated=len(df_perm) if df_perm is not None else 0
+        )
+
+    # Regime-Conditional Best (from permutations)
+    regime_best = {}
+    if not top50.empty and "direction" in top50.columns:
+        for d in ["both", "long_only", "short_only"]:
+            sub = top50[top50["direction"] == d]
+            if not sub.empty:
+                r = sub.iloc[0]
+                regime_best[d] = dict(
+                    ema_pair=r.get("ema_pair", "N/A"),
+                    compounding=r.get("compounding_schedule", "N/A"),
+                    sl_type=r.get("sl_type", "N/A"),
+                    sharpe=r.get("sharpe", 0.0),
+                    cagr_pct=r.get("cagr_pct", 0.0),
+                    composite_score=r.get("composite_score", 0.0)
+                )
+
+    # Risk-Reward Efficiency (top50 Sharpe vs MDD frontier)
+    rr_surface = pd.DataFrame()
+    if not top50.empty:
+        rr_surface = top50[["ema_pair", "sl_type", "compounding_schedule", "sharpe", "max_drawdown_pct", "cagr_pct", "composite_score"]].copy()
+        rr_surface["efficiency"] = rr_surface["sharpe"] / (rr_surface["max_drawdown_pct"].abs().clip(lower=0.01))
+
+    # DSR Overfitting Summary
+    overfit_summary = {}
+    if not top50.empty and "dsr_prob" in top50.columns:
+        dsr_vals = top50["dsr_prob"].values
+        overfit_summary = dict(
+            avg_dsr=round(float(np.mean(dsr_vals)), 3),
+            min_dsr=round(float(np.min(dsr_vals)), 3),
+            pct_dsr_above_05=round(float((dsr_vals > 0.5).mean() * 100), 1),
+            pct_dsr_above_095=round(float((dsr_vals > 0.95).mean() * 100), 1)
+        )
+
+    # Warnings
+    warnings = []
+    if kpi_card.get("best_sharpe", 0) < 0.5:
+        warnings.append("WARN: Best Sharpe < 0.5 — strategy may not be viable after fees.")
+    if kpi_card.get("best_max_dd_pct", 0) < -30:
+        warnings.append("WARN: Best MDD > 30% — extreme drawdown risk.")
+    if overfit_summary.get("pct_dsr_above_05", 0) < 50:
+        warnings.append("WARN: <50% of top configs pass DSR > 0.5 — possible overfitting.")
+
+    dashboard = dict(
+        kpi_card=kpi_card,
+        top50_permutations=top50,
+        regime_conditional_best=regime_best,
+        risk_reward_surface=rr_surface,
+        overfit_summary=overfit_summary,
+        warnings=warnings,
+        confluence_summary=df_conf if df_conf is not None else pd.DataFrame(),
+        compounding_summary=df_comp if df_comp is not None else pd.DataFrame(),
+        sl_4modes_summary=df_4modes if df_4modes is not None else pd.DataFrame(),
+        reversal_lag_summary=df_lag_summary if df_lag_summary is not None else pd.DataFrame()
+    )
+
+    return dashboard
+
+
+def run_full_research(close, ts, symbol, tf, bx, by, sample_size=50, seed=42,
+                      reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Unified Auto-Research Runner: Chains all 6 research modules into a single call.
+    Returns the complete master dashboard dict with all sub-module outputs.
+    """
+    ema_s = _ema(close, 2.0 / (bx + 1.0))
+    ema_l = _ema(close, 2.0 / (by + 1.0))
+
+    # Module 1.1: Confluence
+    df_conf = run_confluence_grid(close, ts, symbol, tf,
+                                  period_pairs=[(5, 20), (10, 50), (20, 200)],
+                                  reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+
+    # Module 1.2: Compounding
+    df_comp = run_compounding_grid(close, ts, ema_s, ema_l, symbol, tf, bx, by,
+                                   reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+
+    # Module 1.4: SL 4-Modes Comparative
+    df_4modes = run_sl_comparative_4modes(close, ts, ema_s, ema_l, symbol, tf, bx, by,
+                                          reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+
+    # Module 1.5: Reversal Lag
+    base_res = backtest_pair(close, ts, ema_s, ema_l, tf=tf, reg_labels=reg_labels,
+                             hurst_val=hurst_val, adf_p=adf_p)
+    df_lag_summary = pd.DataFrame()
+    if base_res:
+        lag_sum, lag_reg, lag_top10 = analyze_reversal_lag(base_res[1], symbol, tf)
+        df_lag_summary = pd.DataFrame([lag_sum]) if lag_sum else pd.DataFrame()
+
+    # Module 1.3: Combinatorial Permutation Engine
+    df_perm = run_combinatorial_permutation_engine(close, ts, symbol, tf,
+                                                    sample_size=sample_size, seed=seed,
+                                                    reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+
+    # Module 1.6: Master Dashboard
+    dashboard = generate_master_research_dashboard(df_perm, df_conf=df_conf, df_comp=df_comp,
+                                                    df_4modes=df_4modes, df_lag_summary=df_lag_summary,
+                                                    symbol=symbol, tf=tf)
+
+    # Sensitivity analysis on the top-1 permutation
+    if not df_perm.empty:
+        top1 = df_perm.iloc[0]
+        px, py = int(top1["ema_pair"].strip("()").split(",")[0]), int(top1["ema_pair"].strip("()").split(",")[1])
+        sens = sensitivity_analysis(close, ts,
+                                     _ema(close, 2.0 / (px + 1.0)),
+                                     _ema(close, 2.0 / (py + 1.0)),
+                                     tf=tf,
+                                     sl_pct=top1["fixed_sl_pct"] if top1["fixed_sl_pct"] > 0 else None,
+                                     tsl_pct=top1["trailing_sl_pct"] if top1["trailing_sl_pct"] > 0 else None,
+                                     tp_pct=top1["take_profit_pct"] if top1["take_profit_pct"] > 0 else None,
+                                     sizing=top1["compounding_schedule"],
+                                     reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+        dashboard["top1_sensitivity"] = sens
+
+    return dashboard
+
+
+
+
+
 # ----------------------------- MONTE CARLO ----------------------------------
 def monte_carlo(trade_rets, n=MC_SIMS, seed=42, return_bands=False):
     """
@@ -834,18 +1253,18 @@ def mc_equity_bands(trade_rets, n=MC_SIMS, seed=99):
     return bands
 
 # ----------------------------- BACKTEST ENGINE ------------------------------
-def backtest_pair(close, ts, ema_s, ema_l,
+def backtest_pair(close, ts, ema_s=None, ema_l=None,
                   balance0=BALANCE0, fee_bps=FEE_BPS, slippage_bps=SLIPPAGE_BPS,
                   dir_filter="both", shifted=True, sizing="flat", reg_labels=None,
                   sl_pct=None, tsl_pct=None, tp_pct=None, atr_multiple=None, tf="1h", pre_seg=None,
-                  hurst_val=0.5, adf_p=0.10):
+                  hurst_val=0.5, adf_p=0.10, ema_pairs_list=None, k_threshold=None):
     if pre_seg is None:
         n       = len(close)
         if reg_labels is None:
             reg_lab = regime_labels(close)
         else:
             reg_lab = reg_labels
-        raw_sig = generate_strategy_signals(close, ema_s, ema_l, reg_labels=reg_lab, hurst_val=hurst_val, adf_p=adf_p)
+        raw_sig = generate_strategy_signals(close, ema_s, ema_l, reg_labels=reg_lab, hurst_val=hurst_val, adf_p=adf_p, ema_pairs_list=ema_pairs_list, k_threshold=k_threshold)
         
         if dir_filter == "long_only":
             raw_sig = np.where(raw_sig > 0, 1.0, 0.0)
@@ -881,7 +1300,7 @@ def backtest_pair(close, ts, ema_s, ema_l,
     equity = balance0
 
     # First pass: calculate unscaled trades (with SL if enabled) to get empirical Kelly f*
-    if sizing == "kelly_half":
+    if sizing in ("kelly_half", "kelly_full"):
         unscaled_rets = []
         for i0, i1 in zip(ei, xi):
             if i1 <= i0 or position[i0] == 0: continue
@@ -894,7 +1313,8 @@ def backtest_pair(close, ts, ema_s, ema_l,
             unscaled_rets.append(((p1 / p0 - 1.0) * d) - (2 * fee))
         if unscaled_rets:
             u_arr = np.array(unscaled_rets)
-            kelly_f = continuous_kelly(u_arr, fraction=0.5)
+            frac = 1.0 if sizing == "kelly_full" else 0.5
+            kelly_f = continuous_kelly(u_arr, fraction=frac)
         else:
             kelly_f = 0.5
         if kelly_f <= 0: kelly_f = 0.05
@@ -902,6 +1322,7 @@ def backtest_pair(close, ts, ema_s, ema_l,
         kelly_f = 1.0
 
     hist_rets = []
+    peak_equity = balance0
     
     for i0, i1 in zip(ei, xi):
         if i1 <= i0: continue
@@ -931,15 +1352,39 @@ def backtest_pair(close, ts, ema_s, ema_l,
         tr     = float(seg_u[-1])
         hist_rets.append(tr)
 
-        # U5 Volatility-Scaled Position Sizing
-        if sizing == "kelly_half" and len(hist_rets) > 1:
-            realized_vol = np.std(hist_rets[-20:]) if len(hist_rets) > 2 else 0.01
-            realized_vol = max(0.001, realized_vol)
-            pos_scale = kelly_f * (0.01 / realized_vol) # 1% target vol
-        else:
+        # Module 1.2: Dynamic Compounding / Reinvestment Schedules
+        n_tr = len(trades)
+        peak_equity = max(peak_equity, equity)
+
+        if sizing == "kelly_full":
             pos_scale = kelly_f
+        elif sizing == "kelly_half":
+            if len(hist_rets) > 1:
+                realized_vol = max(0.001, float(np.std(hist_rets[-20:])) if len(hist_rets) > 2 else 0.01)
+                pos_scale = kelly_f * (0.01 / realized_vol)
+            else:
+                pos_scale = kelly_f
+        elif sizing == "fixed_pct":
+            pos_scale = 0.50  # Risk half balance scale per trade
+        elif sizing == "linear_growth":
+            pos_scale = min(2.0, 1.0 + (n_tr // 5) * 0.1)
+        elif sizing == "exponential_growth":
+            pos_scale = min(3.0, (1.02) ** (n_tr // 5))
+        elif sizing == "profit_triggered":
+            pos_scale = 1.5 if equity >= balance0 * 1.10 else 1.0
+        elif sizing == "drawdown_gated":
+            dd_pct = (peak_equity - equity) / peak_equity if peak_equity > 0 else 0.0
+            pos_scale = 0.25 if dd_pct >= 0.15 else 1.0
+        elif sizing == "volatility_scaled":
+            if len(hist_rets) > 1:
+                vol_20 = max(0.001, float(np.std(hist_rets[-20:])))
+                pos_scale = 0.01 / vol_20
+            else:
+                pos_scale = 1.0
+        else:
+            pos_scale = 1.0
         
-        pos_scale = min(1.0, max(0.01, pos_scale))
+        pos_scale = min(3.0, max(0.01, pos_scale))
         pnl    = equity * pos_scale * tr
         equity += pnl
         eff    = (tr * 100.0 / mfe) if mfe > 0 else 0.0
@@ -947,9 +1392,24 @@ def backtest_pair(close, ts, ema_s, ema_l,
         sl_hit  = 1 if stop_reason == 'sl'  else 0
         tsl_hit = 1 if stop_reason == 'tsl' else 0
         tp_hit  = 1 if stop_reason == 'tp'  else 0
+
+        # Module 1.5: Reversal Lag & Late Exit Cost Calculation
+        if d > 0:
+            peak_local = int(np.argmax(seg_close[:stop_idx+1]))
+            peak_p = seg_close[peak_local]
+            candle_loss = float((peak_p - p1) / peak_p * 100.0) if peak_p > 0 else 0.0
+        else:
+            peak_local = int(np.argmin(seg_close[:stop_idx+1]))
+            peak_p = seg_close[peak_local]
+            candle_loss = float((p1 - peak_p) / peak_p * 100.0) if peak_p > 0 else 0.0
+        
+        rev_lag_bars = int(stop_idx - peak_local)
+        late_exit_cost_bps = float(candle_loss * 100.0)
+
         trades.append((i0, actual_i1, ts[i0], ts[actual_i1], p0, p1, int(d),
                        tr, pnl, int(actual_i1 - i0), mae, mfe, eff, edge_r,
-                       reg_lab[i0], sl_hit, tsl_hit, tp_hit, stop_reason))
+                       reg_lab[i0], sl_hit, tsl_hit, tp_hit, stop_reason,
+                       rev_lag_bars, candle_loss, late_exit_cost_bps))
 
     if not trades: return None
 
@@ -957,7 +1417,8 @@ def backtest_pair(close, ts, ema_s, ema_l,
         "entry_i","exit_i","entry_time","exit_time","entry_price","exit_price",
         "direction","ret","pnl","hold_bars","mae_pct","mfe_pct",
         "trade_efficiency_pct","edge_ratio","entry_regime",
-        "sl_hit","tsl_hit","tp_hit","stop_reason"
+        "sl_hit","tsl_hit","tp_hit","stop_reason",
+        "reversal_lag_bars","candle_loss_pct","late_exit_cost_bps"
     ])
     tdf["entry_time"] = pd.to_datetime(tdf["entry_time"])
     tdf["exit_time"]  = pd.to_datetime(tdf["exit_time"])
@@ -1126,6 +1587,10 @@ def backtest_pair(close, ts, ema_s, ema_l,
         avg_mae_pct     =round(float(tdf.mae_pct.mean()), 2),
         avg_mfe_pct     =round(float(tdf.mfe_pct.mean()), 2),
         avg_edge_ratio  =round(float(tdf.edge_ratio.mean()), 2),
+        avg_reversal_lag_bars   =round(float(tdf["reversal_lag_bars"].mean()), 1),
+        avg_candle_loss_pct     =round(float(tdf["candle_loss_pct"].mean()), 2),
+        avg_late_exit_cost_bps  =round(float(tdf["late_exit_cost_bps"].mean()), 1),
+        total_late_exit_cost_pct=round(float(tdf["candle_loss_pct"].sum()), 2),
         t_stat          =round(float(t_stat), 3),
         p_value         =round(float(p_val), 4),
         is_significant  =is_significant,
@@ -1198,6 +1663,132 @@ def generate_combinatorial_matrix(close, ts, ema_s, ema_l, symbol, tf, bx, by, r
                             sqn=sm["sqn"], ulcer_index=sm["ulcer_index"], cvar_95_pct=sm["cvar_95_pct"]
                         ))
     return pd.DataFrame(combos)
+
+# ----------------------------- MODULE 1.1 N-EMA CONFLUENCE ENGINE -----------
+def run_confluence_grid(close, ts, symbol, tf, period_pairs=None, k_levels=None, reg_labels=None, hurst_val=0.5, adf_p=0.10):
+    """
+    Module 1.1: Evaluates N-EMA Confluence Confirmation Gates (K-of-N voting across EMA pairs).
+    Prevents whipsaws by requiring multiple EMA pairs to simultaneously agree before trade entry.
+    """
+    if period_pairs is None:
+        period_pairs = [(5, 20), (10, 50), (20, 200)]
+    
+    # Pre-calculate EMA arrays for each pair
+    ema_arrays = []
+    for px, py in period_pairs:
+        es = _ema(close, 2.0 / (px + 1.0))
+        el = _ema(close, 2.0 / (py + 1.0))
+        ema_arrays.append((es, el, px, py))
+
+    rows = []
+    
+    # 1. Evaluate individual 1x1 baselines
+    base_sharpe = None
+    base_trades = None
+    for i, (es, el, px, py) in enumerate(ema_arrays):
+        res = backtest_pair(close, ts, es, el, tf=tf, reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+        if res:
+            sm = res[0]
+            if i == 0:
+                base_sharpe = sm["sharpe"]
+                base_trades = max(1, sm["total_trades"])
+            rows.append(dict(
+                symbol=symbol, timeframe=tf,
+                confluence_type="1x1_baseline",
+                n_pairs=1, k_threshold=1,
+                pairs_str=f"({px},{py})",
+                profit_pct=sm["profit_pct"], cagr_pct=sm["cagr_pct"], sharpe=sm["sharpe"],
+                max_drawdown_pct=sm["max_drawdown_pct"], win_rate_pct=sm["win_rate_pct"],
+                total_trades=sm["total_trades"], sqn=sm["sqn"], ulcer_index=sm["ulcer_index"],
+                sharpe_delta=0.0, trades_reduction_pct=0.0
+            ))
+
+    # 2. Evaluate Multi-Pair Confluence sets (combinations of length 2 to N)
+    from itertools import combinations
+    N = len(ema_arrays)
+    for r in range(2, N + 1):
+        for combo in combinations(range(N), r):
+            selected_pairs = [ema_arrays[idx] for idx in combo]
+            pairs_list = [(es, el) for es, el, _, _ in selected_pairs]
+            pairs_desc = "+".join([f"({px},{py})" for _, _, px, py in selected_pairs])
+            
+            # K thresholds to test: from r//2 + 1 to r
+            possible_k = k_levels if k_levels else list(range(max(1, r // 2 + 1), r + 1))
+            for k in possible_k:
+                if k > r: continue
+                res = backtest_pair(close, ts, tf=tf, reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p,
+                                    ema_pairs_list=pairs_list, k_threshold=k)
+                if res:
+                    sm = res[0]
+                    sh_delta = round(sm["sharpe"] - (base_sharpe if base_sharpe is not None else sm["sharpe"]), 2)
+                    tr_red = round((1.0 - sm["total_trades"] / (base_trades if base_trades else 1)) * 100.0, 1)
+                    mode_label = f"{r}x{r}_unanimous" if k == r else f"{k}-of-{r}_majority"
+                    rows.append(dict(
+                        symbol=symbol, timeframe=tf,
+                        confluence_type=mode_label,
+                        n_pairs=r, k_threshold=k,
+                        pairs_str=pairs_desc,
+                        profit_pct=sm["profit_pct"], cagr_pct=sm["cagr_pct"], sharpe=sm["sharpe"],
+                        max_drawdown_pct=sm["max_drawdown_pct"], win_rate_pct=sm["win_rate_pct"],
+                        total_trades=sm["total_trades"], sqn=sm["sqn"], ulcer_index=sm["ulcer_index"],
+                        sharpe_delta=sh_delta, trades_reduction_pct=tr_red
+                    ))
+
+    df_confluence = pd.DataFrame(rows)
+    return df_confluence
+
+# ----------------------------- MODULE 1.5 TREND REVERSAL LAG ENGINE --------
+def analyze_reversal_lag(tdf, symbol="UNKNOWN", tf="1h"):
+    """
+    Module 1.5: Trend Reversal Lag & Late Exit Cost Analysis Engine.
+    Quantifies the number of bars elapsed between favorable price peak and exit signal/stop fire,
+    and calculates candle loss % and late exit cost in basis points.
+    Returns: (summary_dict, regime_breakdown_df, top10_worst_late_exits_df)
+    """
+    if tdf is None or tdf.empty or "reversal_lag_bars" not in tdf.columns:
+        return {}, pd.DataFrame(), pd.DataFrame()
+
+    total_trades = len(tdf)
+    avg_lag = float(tdf["reversal_lag_bars"].mean())
+    std_lag = float(tdf["reversal_lag_bars"].std()) if total_trades > 1 else 0.0
+    max_lag = int(tdf["reversal_lag_bars"].max())
+    
+    avg_loss_pct = float(tdf["candle_loss_pct"].mean())
+    total_loss_pct = float(tdf["candle_loss_pct"].sum())
+    avg_cost_bps = float(tdf["late_exit_cost_bps"].mean())
+
+    summary_lag = dict(
+        symbol=symbol, timeframe=tf, total_trades=total_trades,
+        avg_reversal_lag_bars=round(avg_lag, 1),
+        std_reversal_lag_bars=round(std_lag, 1),
+        max_reversal_lag_bars=max_lag,
+        avg_candle_loss_pct=round(avg_loss_pct, 2),
+        total_candle_loss_pct=round(total_loss_pct, 2),
+        avg_late_exit_cost_bps=round(avg_cost_bps, 1)
+    )
+
+    # Regime breakdown
+    reg_rows = []
+    if "entry_regime" in tdf.columns:
+        for reg, grp in tdf.groupby("entry_regime"):
+            reg_rows.append(dict(
+                regime=reg, trades=len(grp),
+                avg_lag_bars=round(float(grp["reversal_lag_bars"].mean()), 1),
+                avg_candle_loss_pct=round(float(grp["candle_loss_pct"].mean()), 2),
+                avg_late_exit_cost_bps=round(float(grp["late_exit_cost_bps"].mean()), 1)
+            ))
+    df_regime_lag = pd.DataFrame(reg_rows)
+
+    # Pareto top-10 worst late exit trades
+    df_top10 = tdf.sort_values(by="candle_loss_pct", ascending=False).head(10)[[
+        "entry_time", "exit_time", "direction", "entry_price", "exit_price",
+        "ret", "hold_bars", "reversal_lag_bars", "candle_loss_pct", "late_exit_cost_bps", "stop_reason"
+    ]].copy()
+
+    return summary_lag, df_regime_lag, df_top10
+
+
+
 
 # ----------------------------- EFFICIENT FRONTIER SOLVER --------------------
 def compute_efficient_frontier(best_by_combo):
@@ -1276,7 +1867,12 @@ class GridResult:
     def to_df(self):
         return pd.DataFrame(self.rows)
 
-def run_grid(df, symbol, tf, xp, yp, reg_labels=None, hurst_val=0.5, adf_p=0.10):
+def run_grid(df, symbol, tf, xp, yp, reg_labels=None, hurst_val=0.5, adf_p=0.10, min_sep=5):
+    """
+    Exhaustive EMA grid search over all valid (x, y) pairs where y >= x + min_sep.
+    Pre-computes EMA matrix for all needed periods, then evaluates pairs in parallel
+    using ThreadPoolExecutor for 2-4x speed on multi-core machines.
+    """
     close = df["close"].to_numpy(dtype=np.float64)
     ts    = pd.to_datetime(df["time"]).to_numpy()
     allp  = sorted(set(xp)|set(yp))
@@ -1287,20 +1883,34 @@ def run_grid(df, symbol, tf, xp, yp, reg_labels=None, hurst_val=0.5, adf_p=0.10)
     if reg_labels is None:
         reg_labels = regime_labels(close)
 
-    for x in xp:
-        for y in yp:
-            if x >= y: continue
-            out = backtest_pair(close, ts, mats[pmap[x]], mats[pmap[y]], reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
-            if out is None: continue
-            sm, tdf, eq_c, reg_p, mty = out
-            
-            # Penalise low trade count to avoid overfitting single-trade outliers
-            score = compute_score(sm)
-            
+    # Build valid pairs — enforce min_sep to skip near-identical EMA pairs
+    pairs = [(x, y) for x in xp for y in yp if y >= x + min_sep]
+
+    def _eval_pair(xy):
+        x, y = xy
+        out = backtest_pair(close, ts, mats[pmap[x]], mats[pmap[y]],
+                            reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
+        if out is None:
+            return None
+        sm, tdf, eq_c, reg_p, mty = out
+        score = compute_score(sm)
+        return (x, y, sm, tdf, eq_c, reg_p, mty, score)
+
+    # Parallel inner evaluation with thread pool (GIL-light numpy ops)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    n_threads = min(4, max(1, (os.cpu_count() or 2) // 2))
+    with ThreadPoolExecutor(max_workers=n_threads) as tex:
+        fut_map = {tex.submit(_eval_pair, p): p for p in pairs}
+        for fut in as_completed(fut_map):
+            r = fut.result()
+            if r is None:
+                continue
+            x, y, sm, tdf, eq_c, reg_p, mty, score = r
             res.add(symbol, tf, int(x), int(y), sm)
             if best is None or score > best[9]:
-                best = (sm, tdf, eq_c, int(x), int(y), reg_p, mty, mats[pmap[x]], mats[pmap[y]], score)
-    
+                best = (sm, tdf, eq_c, int(x), int(y), reg_p, mty,
+                        mats[pmap[x]], mats[pmap[y]], score)
+
     if best is not None:
         return res, best[:9]
     return res, None
@@ -1397,7 +2007,8 @@ def coarse_fine(df, symbol, tf, step=5, r=ROBUST_R, reg_labels=None, hurst_val=0
     # S4: Use timeframe-adaptive period range so EMA horizons are comparable across TFs
     tf_min, tf_max = PERIOD_RANGE.get(tf, (MIN_P, MAX_P))
     cp = list(range(tf_min, tf_max + 1, step))
-    if not cp or cp[-1] != tf_max: cp.append(tf_max)
+    if tf_min not in cp: cp.insert(0, tf_min)
+    if tf_max not in cp: cp.append(tf_max)
 
     if reg_labels is None:
         reg_labels = regime_labels(df["close"].to_numpy(dtype=np.float64))
@@ -1406,14 +2017,88 @@ def coarse_fine(df, symbol, tf, step=5, r=ROBUST_R, reg_labels=None, hurst_val=0
     if best is None: return res, best
     bx, by = best[3], best[4]
 
+    # S2 Upgrade: Boundary-aware fine search surrounding best + extreme boundary pairs
     radius = max(step, r*2)
-    fx = list(range(max(tf_min, bx-radius), min(tf_max, bx+radius)+1))
-    fy = list(range(max(tf_min, by-radius), min(tf_max, by+radius)+1))
+    fx = list(set(range(max(tf_min, bx-radius), min(tf_max, bx+radius)+1)).union({tf_min}))
+    fy = list(set(range(max(tf_min, by-radius), min(tf_max, by+radius)+1)).union({tf_max}))
+    fx.sort(); fy.sort()
+
     fres, fbest = run_grid(df, symbol, tf, fx, fy, reg_labels=reg_labels, hurst_val=hurst_val, adf_p=adf_p)
     combined = GridResult(); combined.rows = res.rows + fres.rows
     return combined, (fbest if (fbest and fbest[0]["profit_factor"] >= best[0]["profit_factor"]) else best)
 
 # ----------------------------- DATA LOADING --------------------------------
+def fetch_live_market_data(symbols=SYMBOLS, timeframes=TIMEFRAMES):
+    import yfinance as yf
+    import time
+    
+    ticker_map = {
+        "ETH": "ETH-USD", "SOL": "SOL-USD", "XRP": "XRP-USD",
+        "XAU": "GC=F", "XAG": "SI=F"
+    }
+    
+    cache_dir = os.path.join("./data", "data_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    out = {}
+    
+    print("[+] Fetching & Resampling REAL historical market data (Optimized High-Throughput)...")
+    for sym in symbols:
+        ticker_str = ticker_map.get(sym, sym)
+        
+        # Load or download base timeframes: 5m (for 5m, 15m, 30m) and 1h (for 1h, 2h, 3h, 4h) and 1d
+        base_dfs = {}
+        for base_tf, p, inv in [("5m", "60d", "5m"), ("1h", "700d", "1h"), ("1d", "max", "1d")]:
+            cache_file = os.path.join(cache_dir, f"{sym}_{base_tf}.csv")
+            if os.path.exists(cache_file) and (time.time() - os.path.getmtime(cache_file)) < 86400:
+                try:
+                    df_c = pd.read_csv(cache_file)
+                    df_c["time"] = pd.to_datetime(df_c["time"])
+                    base_dfs[base_tf] = df_c
+                    continue
+                except Exception: pass
+            
+            try:
+                df_raw = yf.download(ticker_str, period=p, interval=inv, progress=False)
+                if not df_raw.empty:
+                    df_raw = df_raw.reset_index()
+                    if isinstance(df_raw.columns, pd.MultiIndex):
+                        df_raw.columns = [col[0] for col in df_raw.columns]
+                    col_time = "Datetime" if "Datetime" in df_raw.columns else "Date"
+                    df_raw = df_raw.rename(columns={col_time: "time", "Close": "close"})
+                    df_raw["time"] = pd.to_datetime(df_raw["time"])
+                    df_final = df_raw.dropna(subset=["time", "close"])[["time", "close"]]
+                    
+                    if os.path.exists(cache_file):
+                        try:
+                            df_old = pd.read_csv(cache_file)
+                            df_old["time"] = pd.to_datetime(df_old["time"])
+                            df_final = pd.concat([df_old, df_final], ignore_index=True)
+                        except Exception: pass
+
+                    df_final = df_final.drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
+                    df_final.to_csv(cache_file, index=False)
+                    base_dfs[base_tf] = df_final
+            except Exception as e:
+                print(f"  [error] Failed base download {sym} {base_tf}: {e}")
+                
+        # Fill requested timeframes via local high-speed resampling
+        for tf in timeframes:
+            if tf in base_dfs:
+                out[(sym, tf)] = base_dfs[tf]
+                print(f"  [ready] {sym} {tf} ({len(base_dfs[tf])} bars)")
+            elif tf in ["15m", "30m"] and "5m" in base_dfs:
+                freq_rule = {"15m": "15min", "30m": "30min"}[tf]
+                df_res = base_dfs["5m"].set_index("time").resample(freq_rule).agg({"close": "last"}).dropna().reset_index()
+                out[(sym, tf)] = df_res[["time", "close"]]
+                print(f"  [resampled] {sym} {tf} from 5m ({len(df_res)} bars)")
+            elif tf in ["2h", "3h", "4h"] and "1h" in base_dfs:
+                freq_rule = {"2h": "2h", "3h": "3h", "4h": "4h"}[tf]
+                df_res = base_dfs["1h"].set_index("time").resample(freq_rule).agg({"close": "last"}).dropna().reset_index()
+                out[(sym, tf)] = df_res[["time", "close"]]
+                print(f"  [resampled] {sym} {tf} from 1h ({len(df_res)} bars)")
+                
+    return out
+
 def load_all(path):
     xl  = pd.ExcelFile(path); out = {}
     for sh in xl.sheet_names:
@@ -1425,35 +2110,15 @@ def load_all(path):
         df = df[df["close"] > 0]
         df["time"] = pd.to_datetime(df["time"])
         df = df.drop_duplicates(subset=["time"])
-        df = df[df["time"] < CUTOFF].sort_values("time").reset_index(drop=True)
+        if CUTOFF is not None:
+            df = df[df["time"] < CUTOFF]
+        df = df.sort_values("time").reset_index(drop=True)
         if len(df) < MIN_P + 10: continue
         out[(sym, tf)] = df[["time","close"]]
     return out
 
 def make_demo(bars=4000, seed=42):
-    rng  = np.random.default_rng(seed)
-    freq = {"5m":"5min","15m":"15min","30m":"30min","1h":"h","2h":"2h","3h":"3h","4h":"4h"}
-    out = {}
-    for sym in SYMBOLS:
-        base  = rng.uniform(20, 3000)
-        vol   = rng.uniform(0.006, 0.02)
-        drift = rng.uniform(-0.0001, 0.0003)
-        for tf in TIMEFRAMES:
-            t = pd.date_range("2022-01-01", periods=bars, freq=freq[tf])
-            regimes = rng.integers(0, 3, size=bars//200 + 1)
-            returns = []
-            for r in regimes:
-                if r == 0:
-                    returns.extend(rng.normal(drift*3, vol, 200))
-                elif r == 1:
-                    returns.extend(rng.normal(-drift*2, vol*1.5, 200))
-                else:
-                    returns.extend(rng.normal(0, vol*0.5, 200))
-            returns = np.array(returns[:bars])
-            price = base * np.exp(np.cumsum(returns))
-            out[(sym, tf)] = pd.DataFrame({"time": t, "close": price})
-    print("[demo] generated synthetic data in memory")
-    return out
+    return fetch_live_market_data()
 
 # ----------------------------- VISUALS --------------------------------------
 def _style():
@@ -1976,6 +2641,28 @@ def make_sl_visuals(symbol, tf, sl_df):
     return pngs
 
 
+def clean_df_floats(df, decimals=4):
+    """
+    Rounds float columns in DataFrames and strips timezones from datetimes for Excel compatibility.
+    Safe for pandas 3.0+ StringDtype.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    df_c = df.copy()
+    for col in df_c.columns:
+        if pd.api.types.is_datetime64_any_dtype(df_c[col]):
+            try:
+                df_c[col] = df_c[col].dt.tz_localize(None)
+            except Exception:
+                try:
+                    df_c[col] = df_c[col].dt.tz_convert(None)
+                except Exception:
+                    pass
+        elif pd.api.types.is_float_dtype(df_c[col]):
+            df_c[col] = df_c[col].round(decimals)
+    return df_c
+
+
 # ----------------------------- REPORT WRITER --------------------------------
 def write_reports(profiles_df, full_df, best_by_combo, doc_df, portfolio_pngs, combi_df, frontier_df, weights_df,
                   sl_comparison_df=None, sl_conclusion_df=None, sl_nosl_comp_df=None, sl_h2h_df=None):
@@ -2034,9 +2721,9 @@ def write_reports(profiles_df, full_df, best_by_combo, doc_df, portfolio_pngs, c
                      ("TSL_vs_FixedSL_HeadToHead", sl_h2h_out),
                      ("SL_Conclusion_Master", sl_conc_out),
                      ("RR_Surface", rr_surface)]:
-        df.to_csv(f"{CSV_DIR}/{name}.csv", index=False)
+        clean_df_floats(df, 4).to_csv(f"{CSV_DIR}/{name}.csv", index=False, float_format="%.4f")
     for (s,t),(bx,by,tdf,*_) in best_by_combo.items():
-        tdf.to_csv(f"{CSV_DIR}/Trades_{s}_{t}.csv", index=False)
+        clean_df_floats(tdf, 4).to_csv(f"{CSV_DIR}/Trades_{s}_{t}.csv", index=False, float_format="%.4f")
     print(f"[csv] -> {CSV_DIR}/")
 
     wb  = Workbook(); wb.remove(wb.active)
@@ -2044,9 +2731,10 @@ def write_reports(profiles_df, full_df, best_by_combo, doc_df, portfolio_pngs, c
     hfill = PatternFill("solid", fgColor="07091c")
 
     def ws(name, df):
-        if df.empty: return
+        if df is None or df.empty: return
+        df_clean = clean_df_floats(df, 4)
         sheet = wb.create_sheet(name[:31])
-        for row in dataframe_to_rows(df, index=False, header=True):
+        for row in dataframe_to_rows(df_clean, index=False, header=True):
             sheet.append(row)
         for c in sheet[1]: c.font = hf; c.fill = hfill
         for col in sheet.columns:
@@ -2111,7 +2799,7 @@ def write_reports(profiles_df, full_df, best_by_combo, doc_df, portfolio_pngs, c
     xlsx = f"{OUT_DIR}/optimization_report.xlsx"
     wb.save(xlsx); print(f"[excel] -> {xlsx}")
 
-    zpath = f"{OUT_DIR}/quant_bundle.zip"
+    zpath = f"{OUT_DIR}/quant_analysis_bundle.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
         for root,_,files in os.walk(OUT_DIR):
             for f in files:
@@ -2154,8 +2842,86 @@ def crash_stress_test(df, ema_s_full, ema_l_full, symbol, tf, bx, by):
             ))
     return pd.DataFrame(results)
 
+# ----------------------------- S1: CPCV & PBO -------------------------------
+def compute_cpcv_pbo(close, ts, grid_df, n_splits=6, purge_pct=0.01):
+    """
+    S1 Upgrade: Combinatorial Purged Cross-Validation (CPCV) & Probability of Backtest Overfitting (PBO)
+    (López de Prado 2018 - Advances in Financial Machine Learning, Ch. 12)
+    """
+    import itertools
+    if grid_df is None or grid_df.empty or len(close) < 100:
+        return 0.0, pd.DataFrame()
+
+    top_candidates = grid_df.sort_values("sharpe", ascending=False).head(20)
+    if len(top_candidates) < 4:
+        return 0.0, pd.DataFrame()
+
+    N = len(close)
+    sub_len = N // n_splits
+    if sub_len < 20:
+        return 0.0, pd.DataFrame()
+
+    cand_returns = {}
+    for idx, row in top_candidates.iterrows():
+        bx, by = int(row["ema_x"]), int(row["ema_y"])
+        es = _ema(close, 2.0 / (bx + 1.0))
+        el = _ema(close, 2.0 / (by + 1.0))
+        sig = generate_strategy_signals(close, es, el)
+        pos = np.roll(sig, 1); pos[0] = 0
+        rets = pos[:-1] * (close[1:] / close[:-1] - 1.0)
+        cand_returns[(bx, by)] = rets
+
+    k = n_splits // 2
+    groups = list(range(n_splits))
+    combos = list(itertools.combinations(groups, k))
+
+    logits = []
+    underperform_count = 0
+
+    for test_groups in combos:
+        train_groups = [g for g in groups if g not in test_groups]
+        
+        train_mask = np.zeros(len(close) - 1, dtype=bool)
+        test_mask  = np.zeros(len(close) - 1, dtype=bool)
+
+        for g in train_groups:
+            st = g * sub_len
+            en = (g + 1) * sub_len if g < n_splits - 1 else N
+            p_buf = int((en - st) * purge_pct)
+            train_mask[max(0, st + p_buf): min(N - 1, en - p_buf)] = True
+
+        for g in test_groups:
+            st = g * sub_len
+            en = (g + 1) * sub_len if g < n_splits - 1 else N
+            test_mask[st: min(N - 1, en)] = True
+
+        is_perf = {}
+        oos_perf = {}
+        for pair, rets in cand_returns.items():
+            tr_r = rets[train_mask]
+            te_r = rets[test_mask]
+            is_perf[pair]  = np.mean(tr_r) / (np.std(tr_r) + 1e-9)
+            oos_perf[pair] = np.mean(te_r) / (np.std(te_r) + 1e-9)
+
+        best_is_pair = max(is_perf, key=is_perf.get)
+        best_oos_val = oos_perf[best_is_pair]
+
+        all_oos_vals = list(oos_perf.values())
+        median_oos = float(np.median(all_oos_vals))
+
+        if best_oos_val <= median_oos:
+            underperform_count += 1
+
+        rank_oos = sum(1 for v in all_oos_vals if v <= best_oos_val) / float(len(all_oos_vals))
+        rank_oos = min(max(rank_oos, 1e-4), 1.0 - 1e-4)
+        logit = np.log(rank_oos / (1.0 - rank_oos))
+        logits.append(logit)
+
+    pbo = round(float(underperform_count / max(1, len(combos))), 4)
+    return pbo, pd.DataFrame({"logit": logits})
+
 # ----------------------------- Q7: STRATEGY JSON EXPORT --------------------
-def export_strategy_json(symbol, tf, bx, by, best_sl_dict=None, out_dir=OUT_DIR):
+def export_strategy_json(symbol, tf, bx, by, best_sl_dict=None, pbo=0.0, out_dir=OUT_DIR):
     """
     Q7 Upgrade: Export best strategy config as JSON for ccxt/IB API live deployment.
     """
@@ -2170,6 +2936,7 @@ def export_strategy_json(symbol, tf, bx, by, best_sl_dict=None, out_dir=OUT_DIR)
         "fixed_sl_pct":    best_sl_dict.get("fixed_sl_pct", 0.0) if best_sl_dict else 0.0,
         "trailing_sl_pct": best_sl_dict.get("trailing_sl_pct", 0.0) if best_sl_dict else 0.0,
         "tp_pct":     best_sl_dict.get("take_profit_pct", 0.0) if best_sl_dict else 0.0,
+        "pbo":        pbo,
         "deployed_at": datetime.datetime.utcnow().isoformat() + "Z",
         "regime_adaptive": True,
         "hurst_gate": 0.45,
@@ -2189,13 +2956,21 @@ def worker(symbol, tf, df, mode):
     reg_labs  = regime_labels(close_arr)
     h_val     = prof.get("hurst", 0.5)
     a_p       = prof.get("adf_pvalue", 0.10)
+    n_bars    = len(close_arr)
 
     if mode == "bo":
-        res, best = bayesian_optimization_search(df, symbol, tf, reg_labels=reg_labs, hurst_val=h_val, adf_p=a_p)
+        # Scale Bayesian init/iter with dataset size
+        n_init = min(64, max(20, n_bars // 200))
+        n_iter = min(40, max(10, n_bars // 500))
+        res, best = bayesian_optimization_search(df, symbol, tf, n_init=n_init, n_iter=n_iter, reg_labels=reg_labs, hurst_val=h_val, adf_p=a_p)
     elif mode == "full":
-        # S4: Adaptive period range for full-grid mode
+        # S4: Adaptive period range — full exhaustive brute-force (every integer pair with min_sep=5)
         tf_min_f, tf_max_f = PERIOD_RANGE.get(tf, (MIN_P, MAX_P))
-        res, best = run_grid(df, symbol, tf, list(range(tf_min_f, tf_max_f+1)), list(range(tf_min_f, tf_max_f+1)), reg_labels=reg_labs, hurst_val=h_val, adf_p=a_p)
+        print(f"  [full-grid] {symbol} {tf}: periods {tf_min_f}..{tf_max_f} ({tf_max_f-tf_min_f+1} pts)")
+        res, best = run_grid(df, symbol, tf,
+                             list(range(tf_min_f, tf_max_f+1)),
+                             list(range(tf_min_f, tf_max_f+1)),
+                             reg_labels=reg_labs, hurst_val=h_val, adf_p=a_p, min_sep=5)
     else:
         res, best = coarse_fine(df, symbol, tf, reg_labels=reg_labs, hurst_val=h_val, adf_p=a_p)
     grid_df = res.to_df()
@@ -2210,6 +2985,13 @@ def worker(symbol, tf, df, mode):
                         (grid_df["ema_y"] >= by - r) & (grid_df["ema_y"] <= by + r)]
     sm["stability_score"] = round(float(neighbors["sharpe"].mean()), 2) if not neighbors.empty else round(float(sm["sharpe"]), 2)
 
+    # S1 Upgrade: CPCV & PBO Overfitting Evaluation
+    try:
+        pbo_val, _ = compute_cpcv_pbo(close_arr, ts_arr, grid_df)
+        sm["pbo"] = pbo_val
+    except Exception:
+        sm["pbo"] = 0.0
+
     # Q4: Crash Stress Test
     try:
         crash_df = crash_stress_test(df, ema_s, ema_l, symbol, tf, bx, by)
@@ -2219,7 +3001,7 @@ def worker(symbol, tf, df, mode):
         crash_df = pd.DataFrame()
 
     # Q7: Export strategy JSON
-    export_strategy_json(symbol, tf, bx, by)
+    export_strategy_json(symbol, tf, bx, by, pbo=sm.get("pbo", 0.0))
 
     # Q2: Transaction Cost Sensitivity Sweep & Break-Even Analysis
     fee_png, breakeven_fee_bps = fee_sensitivity_sweep(close_arr, ts_arr, ema_s, ema_l, symbol, tf, hurst_val=h_val, adf_p=a_p)
@@ -2239,6 +3021,41 @@ def worker(symbol, tf, df, mode):
 
     return symbol, tf, prof, grid_df, (bx, by, tdf, eq_curve, sm, reg_prf, monthly, *pngs), combi, sl_df
 
+def archive_previous_run():
+    xlsx_path = os.path.join(OUT_DIR, "optimization_report.xlsx")
+    html_path = os.path.join(OUT_DIR, "dashboard.html")
+    if os.path.exists(xlsx_path) or os.path.exists(html_path):
+        import datetime, shutil, time
+        mtime = os.path.getmtime(xlsx_path) if os.path.exists(xlsx_path) else time.time()
+        ts_str = datetime.datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+        arc_dir = os.path.join("./archive", f"output_{ts_str}")
+        if not os.path.exists(arc_dir):
+            os.makedirs(arc_dir, exist_ok=True)
+            for item in os.listdir(OUT_DIR):
+                if item in ("data_cache", ".git"): continue
+                s_path = os.path.join(OUT_DIR, item)
+                d_path = os.path.join(arc_dir, item)
+                try:
+                    if os.path.isdir(s_path):
+                        shutil.copytree(s_path, d_path, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s_path, d_path)
+                except Exception: pass
+            print(f"[+] Archived previous test output -> {arc_dir}")
+
+def save_run_info(args, data):
+    import datetime
+    info = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "mode": args.mode,
+        "risk_aversion": args.risk_aversion,
+        "fetch_live": getattr(args, "fetch_live", False),
+        "datasets_tested": [f"{s}_{t}" for s, t in data.keys()],
+        "total_datasets": len(data),
+    }
+    with open(os.path.join(OUT_DIR, "run_info.json"), "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
 # ----------------------------- MAIN -----------------------------------------
 def main():
     import multiprocessing
@@ -2247,6 +3064,7 @@ def main():
     pa.add_argument("--mode",  choices=["full","coarse","bo"], default="coarse")
     pa.add_argument("--demo",  action="store_true")
     pa.add_argument("--input", default=DATA_XLSX)
+    pa.add_argument("--fetch-live", action="store_true", help="Force fetching fresh live market data via yfinance")
     # Q8: Expose risk aversion lambda for utility-theoretic ranking
     pa.add_argument("--risk-aversion", type=float, default=RISK_AVERSION,
                     dest="risk_aversion",
@@ -2256,14 +3074,24 @@ def main():
     import builtins
     builtins._RISK_AVERSION = args.risk_aversion
 
+    archive_previous_run()
     os.makedirs(OUT_DIR, exist_ok=True)
-    if args.demo or not os.path.exists(args.input):
-        data = make_demo()
-    else:
+    if args.fetch_live:
+        print("[+] --fetch-live requested: fetching real-time market data...")
+        data = fetch_live_market_data()
+    elif os.path.exists(args.input):
         data = load_all(args.input)
+        if not data:
+            print("[!] Local input file has no valid datasets. Fetching live market data...")
+            data = fetch_live_market_data()
+    else:
+        print("[+] Local input file not found. Fetching live market data...")
+        data = fetch_live_market_data()
 
     if not data:
         print("No usable sheets found."); return
+
+    save_run_info(args, data)
 
     doc_df = pd.DataFrame([
         ("CAGR",                "(1+R%)^(365/Days)-1",             "Annualised compound growth"),
@@ -2282,12 +3110,13 @@ def main():
         ("Runs Test Z",         "(Runs - E[R]) / Std[R]",          "Trade sequence randomness test"),
         ("ADF Test",            "MacKinnon critical value p-value", "Price non-stationarity test"),
         ("Variance Ratio",      "Lo-MacKinlay heteroscedastic VR",  "Market efficiency / Random Walk test"),
+        ("PBO (CPCV)",          "P(OOS_Rank <= Median | IS_Best)",  "Probability of Backtest Overfitting (López de Prado)"),
         ("Efficient Frontier",  "SLSQP Mean-Variance Solver",      "Optimal Sharpe portfolio allocation weights"),
     ], columns=["Metric","Formula","Description"])
 
     all_frames, all_profiles, best_by_combo, eq_curves, all_combis, all_sl = [], [], {}, {}, [], []
 
-    max_workers = max(1, min(4, (os.cpu_count() or 2)))
+    max_workers = max(1, min(8, (os.cpu_count() or 2)))
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
         futs = {ex.submit(worker, s, t, df, args.mode): (s,t) for (s,t),df in data.items()}
         total_tasks = len(futs)
@@ -2354,7 +3183,7 @@ def main():
                   sl_comparison_df=sl_comparison_df, sl_conclusion_df=sl_conclusion_df,
                   sl_nosl_comp_df=sl_nosl_comp_df, sl_h2h_df=sl_h2h_df)
 
-    print(f"\nCompleted -> {OUT_DIR}/dashboard.html | {OUT_DIR}/quant_bundle.zip")
+    print(f"\nCompleted -> {OUT_DIR}/dashboard.html | {OUT_DIR}/quant_analysis_bundle.zip")
 
 if __name__ == "__main__":
     main()

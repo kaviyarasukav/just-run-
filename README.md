@@ -1,131 +1,126 @@
-# EMA SAR Quantitative Optimization System (Elite v4)
+# EMA SAR Quantitative Optimization System
 
-An enterprise-grade, multi-asset quantitative backtesting, optimization, and analytics framework built in Python. Designed for rigorous strategy evaluation, risk modeling, and institutional reporting.
-
----
-
-## Key Capabilities
-
-### 1. Vectorized Dual-EMA Grid Optimization
-- Computes Exponential Moving Averages across periods **2 to 300** using digital filtering (`scipy.signal.lfilter`).
-- **Coarse-to-Fine Grid Search**:
-  - *Coarse Pass*: Scans parameter combinations in step sizes of 5.
-  - *Fine Pass*: Refines search in a $\pm 10$ radius around optimal candidate pairs.
-- **ProcessPoolExecutor Parallel Processing**: Utilizes all available CPU cores for high-throughput computation across asset/timeframe matrix.
-
-### 2. Elimination of Lookahead Bias
-- **1-Bar Execution Delay**: Post-signal execution is shifted by 1 bar using `np.roll(raw_signal, 1)`.
-- **Lookahead Bias Delta**: Compares same-bar vs shifted execution to measure artificial profit inflation.
-
-### 3. Institutional Risk & Statistical Analytics Engine
-- **Kelly Criterion ($f^*$)**: Computes optimal fractional bet sizing:
-  $$f^* = \frac{p \cdot b - q}{b}$$
-- **Risk of Ruin (RoR)**: Calculates analytical probability of 50% equity drawdown:
-  $$\text{RoR} = \left(\frac{1 - \text{edge}}{1 + \text{edge}}\right)^N$$
-- **Hurst Exponent ($H$)**: Evaluates market regime dynamics via R/S analysis ($H > 0.5$ trending, $H < 0.5$ mean-reverting).
-- **Ljung-Box Q-Test**: Tests trade returns for serial dependence / autocorrelation ($p < 0.05$).
-- **Advanced Ratios**:
-  - **Sharpe Ratio** (Total Volatility Risk-Adjusted Return)
-  - **Sortino Ratio** (Downside Volatility Risk-Adjusted Return)
-  - **Calmar Ratio** (Annual Return vs Maximum Drawdown)
-  - **Omega Ratio** (Probability-weighted gain/loss distribution ratio)
-  - **Ulcer Index** (Sustained drawdown depth and duration pain metric)
-  - **Tail Ratio** (95th percentile return vs 5th percentile loss)
-  - **System Quality Number (SQN)** (Van Tharp strategy quality rating)
-- **Walk-Forward 3-Fold OOS Test**: Validates in-sample parameters on expanding out-of-sample windows.
-- **Monte Carlo 500x Bootstrapping**: Simulates 500 resampled trade sequences to produce P5/P50/P95 equity bands.
-- **Parameter Robustness Score**: Scans $\pm 5$ neighborhood to report percentage of surrounding profitable EMA pairs (anti-overfitting check).
+An enterprise-grade multi-asset quantitative backtesting, optimization, and analytics engine.  
+Implements **Continuous Kelly**, **Purged K-Fold CV**, **Block Bootstrap**, **Bayesian Optimization**, **Regime-Adaptive Signals**, **ATR Dynamic Stops**, **Almgren-Chriss Market Impact**, **CPCV/PBO**, and **DSR** — all validated against quant literature (Thorp 2006, López de Prado 2018, Bailey 2012, Lo-MacKinlay 1988).
 
 ---
 
-## Workflow Architecture
+## Quick Start
 
-```
-[Input: market_data.xlsx]
-          │
-          ▼
-[Pre-Test Profiling Engine] ───► Volatility, Hurst Exponent, Skewness, Kurtosis
-          │
-          ▼
-[ProcessPoolExecutor Grid Engine] ───► Coarse Pass ➔ Fine Pass
-          │
-          ▼
-[Realistic Execution Engine] ───► 1-Bar Shift, Trade Log, MAE/MFE, Long/Short Split
-          │
-          ▼
-[Statistical & Risk Engine] ───► Kelly, Monte Carlo, Walk-Forward, Ljung-Box, Ulcer
-          │
-          ▼
-[Reporting & Visualization Output] ───► Excel Master, HTML Dashboard, CSVs, PNGs, ZIP
-```
-
----
-
-## Directory Structure
-
-```
-z:\just run\
-├── ema_sar_optimizer.py      # Core quantitative engine & pipeline
-├── data/
-│   └── market_data.xlsx       # Input OHLCV market data
-├── output/
-│   ├── dashboard.html         # Interactive HTML Chart.js dashboard
-│   ├── optimization_report.xlsx # Master Excel workbook (68+ sheets)
-│   ├── quant_bundle.zip       # Standalone ZIP package containing all outputs
-│   ├── csv/                   # CSV exports of all tables & trade logs
-│   │   ├── Summary.csv
-│      ├── WithWithout.csv
-│      ├── LongShort.csv
-│      ├── OmegaUlcer.csv
-│      ├── Profiles.csv
-│      └── Trades_*.csv
-│   └── *.png                  # 490+ High-resolution chart PNGs
-└── README.md                  # System documentation
-```
-
----
-
-## Execution Guide
-
-### Prerequisites
-Ensure Python 3.8+ is installed with required packages:
 ```bash
-pip install numpy pandas scipy openpyxl matplotlib
-```
+# 1. Install dependencies
+pip install numpy pandas scipy matplotlib openpyxl statsmodels
 
-### 1. Synthetic Demo Run
-Test the entire pipeline using auto-generated synthetic data:
-```bash
-python ema_sar_optimizer.py --demo --mode coarse
-```
+# 2. Health-check (no data needed, ~5 seconds)
+python validate.py
 
-### 2. Coarse-to-Fine Grid Search (Recommended)
-Run optimization on your Excel dataset (`./data/market_data.xlsx`):
-```bash
-python ema_sar_optimizer.py --input ./data/market_data.xlsx --mode coarse
-```
+# 3. Run with auto-install + demo data
+python run.py --demo
 
-### 3. Exhaustive Full Grid Search
-Run full parameter grid search across all periods from 2 to 300:
-```bash
-python ema_sar_optimizer.py --input ./data/market_data.xlsx --mode full
+# 4. Run on your data
+python run.py --mode coarse
 ```
 
 ---
 
-## Output Deliverables
+## Run Modes
 
-1. **Interactive Web Dashboard (`dashboard.html`)**: Chart.js risk-return scatter plots, performance bars, and metric breakdowns.
-2. **Excel Master Workbook (`optimization_report.xlsx`)**: 68+ sheets covering strategy summaries, trade logs, yearly/session/regime breakdowns, and formula specifications.
-3. **CSV Export Directory (`./output/csv/`)**: Structured data files ready for database import or Python/R pipelines.
-4. **PNG Visualization Suite (`./output/*.png`)**:
-   - Equity Curve & Underwater Drawdown
-   - Parameter Space Heatmaps
-   - MAE vs MFE Execution Quality Scatter
-   - Trade Return Distributions
-   - Session Performance Breakdown
-   - Monte Carlo 500x Fan Bands
-   - Hour × Weekday PnL Heatmaps
-   - Rolling Sharpe Ratios
-   - Cross-Asset Equity Correlation Matrix
-   - Universe Risk-Return Frontier
+| Command | Description |
+|---------|-------------|
+| `--demo` | Synthetic demo data, full pipeline |
+| `--mode coarse` | **Recommended** — Coarse+Fine grid |
+| `--mode bo` | Bayesian Optimization (Sobol + RBF surrogate) |
+| `--mode full` | Exhaustive full grid (slow, most thorough) |
+| `--risk-aversion 2.0` | CLI risk-aversion λ for utility-theoretic ranking |
+
+---
+
+## Architecture
+
+```
+market_data.xlsx
+    │
+    ├─► profile_dataset()        Hurst, ADF, VR, volatility, regime
+    │
+    ├─► Optimization Engine
+    │       coarse_fine()        Step-5 grid → ±10 fine refinement (S2: boundary-aware)
+    │       bayesian_opt()       Sobol sampling + RBF thin-plate surrogate (F2)
+    │
+    ├─► backtest_pair()          1-bar shifted execution, SL/TSL/TP/ATR, regime signals (C1-C6)
+    │       generate_strategy_signals()   Hurst/ADF gate → EMA or Bollinger Band MR (F1, Q1)
+    │       apply_stop_loss()    Vectorized: Fixed SL → TP → TSL priority (P2, U1, U2)
+    │
+    ├─► Risk & Statistics
+    │       continuous_kelly()   f* = μ/σ² continuous-time formula (F5)
+    │       deflated_sharpe_ratio()  Bailey-LdP 2012 DSR (M2)
+    │       monte_carlo()        Block bootstrap for autocorrelated returns (F4, P4)
+    │       purged_kfold_cv()    Purged K-Fold with EMA cache (F3, P1)
+    │       compute_cpcv_pbo()   Combinatorial PCV — PBO estimate (S1)
+    │       variance_ratio_test() Multi-lag k∈{2,4,8,16} (M4)
+    │
+    ├─► SL Grid (run_sl_grid)
+    │       225+ configs: fixed / trailing / dual / dual_tp / atr_dynamic
+    │       3D space: SL × TSL × TP_RR (U3)
+    │       ATR-normalized multipliers: [0.5→3.0] (U1)
+    │       Regime-conditional adjustments (U2)
+    │       Walk-Forward OOS validation per config (U4)
+    │
+    ├─► Portfolio (compute_efficient_frontier)
+    │       Daily-resampled equity curves → covariance (F6)
+    │       SLSQP max-Sharpe portfolio weights
+    │
+    └─► Reporting
+            dashboard.html       Chart.js interactive report
+            optimization_report.xlsx  68+ sheets
+            output/csv/          All tables as CSV
+            output/*.png         490+ charts
+            output/strategy_*.json   Live-trading configs (Q7)
+```
+
+---
+
+## Implemented Research Upgrades
+
+| ID | Reference | Implementation |
+|----|-----------|----------------|
+| F1 | Hurst 1951, Lo-MacKinlay 1988 | Hurst/ADF gate → BB mean-reversion in sideways markets |
+| F2 | Bayesian Optimization | Sobol QMC + RBF surrogate model |
+| F3 | López de Prado 2018 | Purged K-Fold CV with temporal embargo |
+| F4 | Politis-Romano 1994 | Moving Block Bootstrap for autocorrelated returns |
+| F5 | Thorp 2006 | Continuous Kelly: f* = μ/σ² |
+| F6 | Markowitz 1952 | Daily-resampled multi-frequency portfolio frontier |
+| F7 | Schwager | Gain-to-Pain = Σ(positive rets) / Σ(|negative rets|) |
+| M2 | Bailey-LdP 2012 | Deflated Sharpe Ratio: trial-count & kurtosis correction |
+| M4 | Lo-MacKinlay 1988 | Multi-lag Variance Ratio Test k∈{2,4,8,16} |
+| M5 | Kaufman 2013 | Diffusion approximation risk of ruin |
+| Q6 | Benjamini-Hochberg | FDR multiple-comparison correction on 90,000 p-values |
+| Q8 | von Neumann-Morgenstern 1944 | Expected utility: U = E[R] − λ/2 · Var[R] |
+| S1 | López de Prado 2018 Ch.12 | CPCV: Probability of Backtest Overfitting (PBO) |
+| U1 | Volatility-adaptive SL | ATR(14) normalized stop-loss multipliers |
+| U3 | Risk/Reward theory | 3D grid: SL × TSL × TP_RR |
+
+---
+
+## Output Files
+
+| File | Description |
+|------|-------------|
+| `output/dashboard.html` | Interactive Chart.js dashboard |
+| `output/optimization_report.xlsx` | Master 68-sheet workbook |
+| `output/csv/Summary.csv` | Best EMA pair per asset/TF |
+| `output/csv/SL_Permutations_Full.csv` | All SL configs ranked |
+| `output/csv/SL_Conclusion_Master.csv` | Best SL with OOS validation |
+| `output/csv/RR_Surface.csv` | Risk-Reward 3D surface |
+| `output/strategy_<SYM>_<TF>.json` | ccxt/IBKR deploy config |
+| `output/*.png` | 490+ charts (equity, heatmap, MC bands…) |
+
+---
+
+## File Overview
+
+| File | Purpose |
+|------|---------|
+| `ema_sar_optimizer.py` | Core engine (2,450 lines) |
+| `export_and_bundle.py` | CSV export + HTML report + ZIP bundler |
+| `run.py` | Quick launcher with dep-check |
+| `validate.py` | Static health-check (~30 assertions, no data needed) |
